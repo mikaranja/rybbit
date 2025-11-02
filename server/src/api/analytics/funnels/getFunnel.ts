@@ -2,7 +2,6 @@ import { FilterParams } from "@rybbit/shared";
 import { FastifyReply, FastifyRequest } from "fastify";
 import SqlString from "sqlstring";
 import { clickhouse } from "../../../db/clickhouse/clickhouse.js";
-import { getUserHasAccessToSitePublic } from "../../../lib/auth-utils.js";
 import { getFilterStatement, getTimeStatement, patternToRegex, processResults } from "../utils.js";
 
 type FunnelStep = {
@@ -44,15 +43,9 @@ export async function getFunnel(
     return reply.status(400).send({ error: "At least 2 steps are required for a funnel" });
   }
 
-  const userHasAccessToSite = await getUserHasAccessToSitePublic(request, site);
-  if (!userHasAccessToSite) {
-    return reply.status(403).send({ error: "Forbidden" });
-  }
-
   try {
-    const filterStatement = getFilterStatement(request.query.filters);
-
     const timeStatement = getTimeStatement(request.query);
+    const filterStatement = getFilterStatement(request.query.filters, Number(site), timeStatement);
 
     // Build conditional statements for each step
     const stepConditions = steps.map(step => {

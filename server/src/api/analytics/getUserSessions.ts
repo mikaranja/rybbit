@@ -1,7 +1,6 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { clickhouse } from "../../db/clickhouse/clickhouse.js";
 import { getFilterStatement, getTimeStatement, processResults } from "./utils.js";
-import { getUserHasAccessToSitePublic } from "../../lib/auth-utils.js";
 
 // Individual pageview type
 type Pageview = {
@@ -53,13 +52,8 @@ export async function getUserSessions(req: FastifyRequest<GetUserSessionsRequest
   const { startDate, endDate, timeZone, site, filters } = req.query;
   const userId = req.params.userId;
 
-  const userHasAccessToSite = await getUserHasAccessToSitePublic(req, site);
-  if (!userHasAccessToSite) {
-    return res.status(403).send({ error: "Forbidden" });
-  }
-
-  const filterStatement = getFilterStatement(filters);
   const timeStatement = getTimeStatement(req.query);
+  const filterStatement = getFilterStatement(filters, Number(site), timeStatement);
 
   const query = `
 SELECT

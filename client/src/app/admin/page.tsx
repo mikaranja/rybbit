@@ -56,7 +56,8 @@ export default function AdminPage() {
         <div className="mb-2">
           <MobileSidebar />
         </div>
-        <AdminLayout title="Admin Dashboard">
+        <AdminLayout>
+          <div className="text-2xl font-bold mb-4">Admin Dashboard</div>
           <Tabs defaultValue="organizations" value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="mb-4">
               <TabsTrigger value="organizations">Organizations</TabsTrigger>

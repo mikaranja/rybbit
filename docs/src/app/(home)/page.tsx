@@ -18,6 +18,7 @@ import { Integrations } from "@/components/Integration";
 import { PricingSection } from "@/components/PricingSection";
 import { TweetCard } from "@/components/Tweet";
 import Image from "next/image";
+import { DEFAULT_EVENT_LIMIT } from "../../lib/const";
 
 const tilt_wrap = Tilt_Warp({
   subsets: ["latin"],
@@ -91,19 +92,7 @@ export default function HomePage() {
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }} />
       <div className="flex flex-col items-center justify-center overflow-x-hidden pt-16 md:pt-24">
-        {/* <GitHubStarButton /> */}
-        <a
-          href="https://www.producthunt.com/products/rybbit?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_source=badge-rybbit&#0045;2"
-          target="_blank"
-        >
-          <img
-            src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1028220&theme=neutral&period=daily&t=1761001525479"
-            alt="Rybbit - Open&#0032;Source&#0032;Google&#0032;Analytics&#0032;Replacement | Product Hunt"
-            style={{ width: "210px", height: "54px", marginBottom: "35px" }}
-            width="250"
-            height="54"
-          />
-        </a>
+        <GitHubStarButton />
 
         <h1
           className={cn(
@@ -128,7 +117,7 @@ export default function HomePage() {
               Track your site
             </TrackedButton>
             <TrackedButton
-              href="https://demo.rybbit.io/21"
+              href="https://demo.rybbit.com/21"
               eventName="demo"
               eventProps={{ location: "hero", button_text: "See live demo" }}
               className="w-full sm:w-auto bg-neutral-800 hover:bg-neutral-700 text-white font-medium px-5 py-3 rounded-lg border border-neutral-600 transform hover:-translate-y-0.5 transition-all duration-200 hover:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-400 focus:ring-opacity-50 cursor-pointer"
@@ -138,10 +127,9 @@ export default function HomePage() {
           </div>
           <p className="text-neutral-400 text-xs md:text-sm flex items-center justify-center gap-2 mt-6">
             <CheckCircle className="w-3 h-3 md:w-4 md:h-4" />
-            First 10,000 events/m are free. No credit card required.
+            First {DEFAULT_EVENT_LIMIT.toLocaleString()} pageviews/m are free. No credit card required.
           </p>
         </div>
-
         <div className="relative w-full max-w-[1300px] mb-10 px-4">
           {/* Background gradients - overlapping circles for organic feel */}
           <div className="absolute top-0 left-0 w-[550px] h-[550px] bg-emerald-500/40 rounded-full blur-[80px] opacity-70"></div>
@@ -163,7 +151,7 @@ export default function HomePage() {
           <div className="relative z-10 rounded-lg overflow-hidden border-8 border-neutral-100/5 shadow-2xl shadow-emerald-900/10">
             {/* Remove mobile message and show iframe on all devices */}
             <iframe
-              src="https://demo.rybbit.io/21/globe?timeMode=range&wellKnown=last-7-days&bucket=day&stat=users"
+              src="https://demo.rybbit.com/21/globe?timeMode=range&wellKnown=last-7-days&bucket=day&stat=users"
               width="1300"
               height="750"
               className="w-full h-[600px] md:h-[700px] lg:h-[750px]"
@@ -370,7 +358,7 @@ export default function HomePage() {
                     <br />
                     <p>
                       You can see for yourself by checking out our{" "}
-                      <Link href="https://demo.rybbit.io/21" className="text-emerald-400 hover:text-emerald-300">
+                      <Link href="https://demo.rybbit.com/21" className="text-emerald-400 hover:text-emerald-300">
                         demo site
                       </Link>
                       . The difference in usability is night and day.
@@ -486,7 +474,7 @@ export default function HomePage() {
                 It&apos;s time to switch to analytics that&apos;s made for you
               </h2>
               <p className="text-base md:text-xl text-neutral-300 mb-6 md:mb-10 max-w-3xl mx-auto font-light">
-                The first 10,000 events a month are free
+                The first {DEFAULT_EVENT_LIMIT.toLocaleString()} pageviews a month are free
               </p>
 
               <div className="flex flex-col sm:flex-row items-center justify-center gap-4 md:gap-6 mb-6 md:mb-8 w-full sm:w-auto">

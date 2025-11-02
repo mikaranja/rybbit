@@ -1,6 +1,5 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { clickhouse } from "../../db/clickhouse/clickhouse.js";
-import { getUserHasAccessToSitePublic } from "../../lib/auth-utils.js";
 import { FilterParameter } from "./types.js";
 import { getFilterStatement, getSqlParam, getTimeStatement, processResults } from "./utils.js";
 import { FilterParams } from "@rybbit/shared";
@@ -51,9 +50,10 @@ type GetSingleColPaginatedResponse = {
 
 const getQuery = (request: FastifyRequest<GetSingleColRequest>, isCountQuery: boolean = false) => {
   const { filters, parameter, limit, page } = request.query;
+  const site = request.params.site;
 
-  const filterStatement = getFilterStatement(filters);
   const timeStatement = getTimeStatement(request.query);
+  const filterStatement = getFilterStatement(filters, Number(site), timeStatement);
 
   let validatedLimit: number | null = null;
   if (!isCountQuery && limit !== undefined) {
@@ -143,7 +143,7 @@ const getQuery = (request: FastifyRequest<GetSingleColRequest>, isCountQuery: bo
       TitleStatsWithSessions AS (
           SELECT
               e.page_title as value,
-              argMax(e.pathname, e.timestamp) as pathname,
+              e.pathname as pathname,
               e.session_id,
               spc.pageviews_in_session
           FROM events e
@@ -178,7 +178,6 @@ const getQuery = (request: FastifyRequest<GetSingleColRequest>, isCountQuery: bo
   if (parameter === "exit_page" || parameter === "entry_page") {
     const isEntry = parameter === "entry_page";
     const orderDirection = isEntry ? "ASC" : "DESC";
-    const rowNumFilter = isEntry ? "row_num = 1" : "row_num = 1";
 
     const baseCteQuery = `
       SessionPageCounts AS (
@@ -228,7 +227,7 @@ const getQuery = (request: FastifyRequest<GetSingleColRequest>, isCountQuery: bo
       FilteredDurations AS (
           SELECT *
           FROM PageDurations
-          WHERE ${rowNumFilter}
+          WHERE row_num = 1
       ),
       PathStats AS (
           SELECT
@@ -397,11 +396,6 @@ const getQuery = (request: FastifyRequest<GetSingleColRequest>, isCountQuery: bo
 export async function getSingleCol(req: FastifyRequest<GetSingleColRequest>, res: FastifyReply) {
   const { parameter, page } = req.query;
   const site = req.params.site;
-
-  const userHasAccessToSite = await getUserHasAccessToSitePublic(req, site);
-  if (!userHasAccessToSite) {
-    return res.status(403).send({ error: "Forbidden" });
-  }
 
   const isPaginatedRequest = page !== undefined;
 

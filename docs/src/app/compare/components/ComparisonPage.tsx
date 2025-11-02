@@ -4,6 +4,7 @@ import Image from "next/image";
 import React from "react";
 import { TrackedButton } from "../../../components/TrackedButton";
 import { cn } from "../../../lib/utils";
+import { DEFAULT_EVENT_LIMIT } from "../../../lib/const";
 
 const tilt_wrap = Tilt_Warp({
   subsets: ["latin"],
@@ -76,7 +77,7 @@ export function ComparisonPage({ competitorName, sections, comparisonContent }: 
               Track your site
             </TrackedButton>
             <TrackedButton
-              href="https://demo.rybbit.io/21"
+              href="https://demo.rybbit.com/21"
               eventName="demo"
               eventProps={{ location: "hero", button_text: "See live demo" }}
               className="w-full sm:w-auto bg-neutral-800 hover:bg-neutral-700 text-white font-medium px-5 py-3 rounded-lg border border-neutral-600 transform hover:-translate-y-0.5 transition-all duration-200 hover:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-400 focus:ring-opacity-50 cursor-pointer"
@@ -86,7 +87,7 @@ export function ComparisonPage({ competitorName, sections, comparisonContent }: 
           </div>
           <p className="text-neutral-400 text-xs md:text-sm flex items-center justify-center gap-2 mt-6">
             <CheckCircle className="w-3 h-3 md:w-4 md:h-4" />
-            First 10,000 events/m are free. No credit card required.
+            First {DEFAULT_EVENT_LIMIT.toLocaleString()} pageviews/m are free. No credit card required.
           </p>
         </div>
       </div>
@@ -192,7 +193,7 @@ export function ComparisonPage({ competitorName, sections, comparisonContent }: 
               It&apos;s time to switch to analytics that&apos;s made for you
             </h2>
             <p className="text-base md:text-xl text-neutral-300 mb-6 md:mb-10 max-w-3xl mx-auto font-light">
-              The first 10,000 events a month are free
+              The first {DEFAULT_EVENT_LIMIT.toLocaleString()} events a month are free
             </p>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 md:gap-6 mb-6 md:mb-8 w-full sm:w-auto">

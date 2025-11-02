@@ -13,9 +13,9 @@ type GetOverviewResponse = {
   session_duration: number;
 };
 
-const getQuery = (params: FilterParams) => {
-  const filterStatement = getFilterStatement(params.filters);
+const getQuery = (params: FilterParams, siteId: number) => {
   const timeStatement = getTimeStatement(params);
+  const filterStatement = getFilterStatement(params.filters, siteId, timeStatement);
 
   return `
     WITH
@@ -95,19 +95,18 @@ export interface OverviewRequest {
 export async function getOverview(req: FastifyRequest<OverviewRequest>, res: FastifyReply) {
   const { startDate, endDate, timeZone, filters, pastMinutesStart, pastMinutesEnd } = req.query;
   const site = req.params.site;
-  const userHasAccessToSite = await getUserHasAccessToSitePublic(req, site);
-  if (!userHasAccessToSite) {
-    return res.status(403).send({ error: "Forbidden" });
-  }
 
-  const query = getQuery({
-    startDate,
-    endDate,
-    timeZone,
-    filters,
-    pastMinutesStart,
-    pastMinutesEnd,
-  });
+  const query = getQuery(
+    {
+      startDate,
+      endDate,
+      timeZone,
+      filters,
+      pastMinutesStart,
+      pastMinutesEnd,
+    },
+    Number(site)
+  );
 
   try {
     const result = await clickhouse.query({

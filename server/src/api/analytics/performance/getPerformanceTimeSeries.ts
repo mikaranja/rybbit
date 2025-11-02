@@ -2,7 +2,6 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { clickhouse } from "../../../db/clickhouse/clickhouse.js";
 import { getFilterStatement, getTimeStatement, processResults, TimeBucketToFn, bucketIntervalMap } from "../utils.js";
 import SqlString from "sqlstring";
-import { getUserHasAccessToSitePublic } from "../../../lib/auth-utils.js";
 import { validateTimeStatementFillParams } from "../query-validation.js";
 import { TimeBucket, PerformanceTimeSeriesPoint } from "../types.js";
 import { FilterParams } from "@rybbit/shared";
@@ -66,9 +65,10 @@ function getTimeStatementFill(params: FilterParams, bucket: TimeBucket) {
   return "";
 }
 
-const getQuery = (params: FilterParams<{ bucket: TimeBucket }>) => {
+const getQuery = (params: FilterParams<{ bucket: TimeBucket }>, siteId: number) => {
   const { startDate, endDate, timeZone, bucket, filters, pastMinutesStart, pastMinutesEnd } = params;
-  const filterStatement = getFilterStatement(filters);
+  const timeStatement = getTimeStatement(params);
+  const filterStatement = getFilterStatement(filters, siteId, timeStatement);
 
   const isAllTime = !startDate && !endDate && !pastMinutesStart && !pastMinutesEnd;
 
@@ -101,7 +101,7 @@ WHERE
     site_id = {siteId:Int32}
     AND type = 'performance'
     ${filterStatement}
-    ${getTimeStatement(params)}
+    ${timeStatement}
 GROUP BY time ORDER BY time ${isAllTime ? "" : getTimeStatementFill(params, bucket)}`;
 
   return query;
@@ -120,12 +120,7 @@ export async function getPerformanceTimeSeries(
 ) {
   const site = req.params.site;
 
-  const userHasAccessToSite = await getUserHasAccessToSitePublic(req, site);
-  if (!userHasAccessToSite) {
-    return res.status(403).send({ error: "Forbidden" });
-  }
-
-  const query = getQuery(req.query);
+  const query = getQuery(req.query, Number(site));
 
   try {
     const result = await clickhouse.query({

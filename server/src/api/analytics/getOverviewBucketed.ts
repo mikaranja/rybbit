@@ -2,7 +2,6 @@ import { FilterParams } from "@rybbit/shared";
 import { FastifyReply, FastifyRequest } from "fastify";
 import SqlString from "sqlstring";
 import { clickhouse } from "../../db/clickhouse/clickhouse.js";
-import { getUserHasAccessToSitePublic } from "../../lib/auth-utils.js";
 import { validateTimeStatementFillParams } from "./query-validation.js";
 import { getFilterStatement, getTimeStatement, processResults, TimeBucketToFn, bucketIntervalMap } from "./utils.js";
 import { TimeBucket } from "./types.js";
@@ -66,9 +65,10 @@ function getTimeStatementFill(params: FilterParams, bucket: TimeBucket) {
   return "";
 }
 
-const getQuery = (params: FilterParams<{ bucket: TimeBucket }>) => {
+const getQuery = (params: FilterParams<{ bucket: TimeBucket }>, siteId: number) => {
   const { startDate, endDate, timeZone, bucket, filters, pastMinutesStart, pastMinutesEnd } = params;
-  const filterStatement = getFilterStatement(filters);
+  const timeStatement = getTimeStatement(params);
+  const filterStatement = getFilterStatement(filters, siteId, timeStatement);
 
   const pastMinutesRange =
     pastMinutesStart !== undefined && pastMinutesEnd !== undefined
@@ -167,20 +167,18 @@ export async function getOverviewBucketed(
   const { startDate, endDate, timeZone, bucket, filters, pastMinutesStart, pastMinutesEnd } = req.query;
   const site = req.params.site;
 
-  const userHasAccessToSite = await getUserHasAccessToSitePublic(req, site);
-  if (!userHasAccessToSite) {
-    return res.status(403).send({ error: "Forbidden" });
-  }
-
-  const query = getQuery({
-    startDate,
-    endDate,
-    timeZone,
-    bucket,
-    filters,
-    pastMinutesStart,
-    pastMinutesEnd,
-  });
+  const query = getQuery(
+    {
+      startDate,
+      endDate,
+      timeZone,
+      bucket,
+      filters,
+      pastMinutesStart,
+      pastMinutesEnd,
+    },
+    Number(site)
+  );
 
   try {
     const result = await clickhouse.query({

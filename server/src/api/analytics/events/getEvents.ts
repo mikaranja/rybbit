@@ -1,7 +1,6 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { clickhouse } from "../../../db/clickhouse/clickhouse.js";
 import { processResults, getTimeStatement, getFilterStatement } from "../utils.js";
-import { getUserHasAccessToSitePublic } from "../../../lib/auth-utils.js";
 import { FilterParams } from "@rybbit/shared";
 
 export type GetEventsResponse = {
@@ -36,11 +35,6 @@ export async function getEvents(req: FastifyRequest<GetEventsRequest>, res: Fast
   const { site } = req.params;
   const { startDate, endDate, timeZone, filters, page = "1", pageSize = "20", count } = req.query;
 
-  const userHasAccessToSite = await getUserHasAccessToSitePublic(req, site);
-  if (!userHasAccessToSite) {
-    return res.status(403).send({ error: "Forbidden" });
-  }
-
   // Use count if provided (for backward compatibility), otherwise use pageSize
   const limit = count ? parseInt(count, 10) : parseInt(pageSize, 10);
   const offset = (parseInt(page, 10) - 1) * limit;
@@ -49,7 +43,7 @@ export async function getEvents(req: FastifyRequest<GetEventsRequest>, res: Fast
   const timeStatement =
     startDate || endDate ? getTimeStatement(req.query) : "AND timestamp > now() - INTERVAL 30 MINUTE"; // Default to last 30 minutes if no time range specified
 
-  const filterStatement = filters ? getFilterStatement(filters) : "";
+  const filterStatement = filters ? getFilterStatement(filters, Number(site), timeStatement) : "";
 
   try {
     // First, get the total count for pagination metadata
