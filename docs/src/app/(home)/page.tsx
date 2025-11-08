@@ -1,24 +1,26 @@
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Tilt_Warp } from "next/font/google";
-import Link from "next/link";
-import { CheckCircle } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { GitHubStarButton } from "@/components/GitHubStarButton";
-import { TrackedButton } from "@/components/TrackedButton";
-import { EventTracking } from "@/components/Cards/EventTracking";
-import { GoalConversion } from "@/components/Cards/GoalConversion";
-import { RealTimeAnalytics } from "@/components/Cards/RealTimeAnalytics";
-import { UserBehaviorTrends } from "@/components/Cards/UserBehaviorTrends";
-import { UserFlowAnalysis } from "@/components/Cards/UserFlowAnalysis";
-import { UserProfiles } from "@/components/Cards/UserProfiles";
-import { UserSessions } from "@/components/Cards/UserSessions";
-import { SessionReplay } from "@/components/Cards/SessionReplay";
-import { WebVitals } from "@/components/Cards/WebVitals";
 import { Integrations } from "@/components/Integration";
 import { PricingSection } from "@/components/PricingSection";
+import { SectionBadge } from "@/components/SectionBadge";
+import { TrackedButton } from "@/components/TrackedButton";
 import { TweetCard } from "@/components/Tweet";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { cn } from "@/lib/utils";
+import { CheckCircle, Code, Cookie, MousePointer, Target, TrendingUp, Zap } from "lucide-react";
+import { Tilt_Warp } from "next/font/google";
 import Image from "next/image";
+import Link from "next/link";
 import { DEFAULT_EVENT_LIMIT } from "../../lib/const";
+import { UserBehaviorTrends } from "../../components/Cards/UserBehaviorTrends";
+import { RealTimeAnalytics } from "../../components/Cards/RealTimeAnalytics";
+import { SessionReplay } from "../../components/Cards/SessionReplay";
+import WebVitals from "../../components/Cards/WebVitals";
+import { UserProfiles } from "../../components/Cards/UserProfiles";
+import { UserSessions } from "../../components/Cards/UserSessions";
+import { UserFlowAnalysis } from "../../components/Cards/UserFlowAnalysis";
+import { EventTracking } from "../../components/Cards/EventTracking";
+import { GoalConversion } from "../../components/Cards/GoalConversion";
+import { Funnels } from "../../components/Cards/Funnels";
 
 const tilt_wrap = Tilt_Warp({
   subsets: ["latin"],
@@ -30,14 +32,14 @@ const faqSchema = {
   "@context": "https://schema.org",
   "@type": "FAQPage",
   mainEntity: [
-    {
-      "@type": "Question",
-      name: "Is Rybbit GDPR and CCPA compliant?",
-      acceptedAnswer: {
-        "@type": "Answer",
-        text: "Yes, Rybbit is fully compliant with GDPR, CCPA, and other privacy regulations. We don't use cookies or collect any personal data that could identify your users. We salt user IDs daily to ensure users are not fingerprinted. You will not need to display a cookie consent banner to your users.",
-      },
-    },
+    // {
+    //   "@type": "Question",
+    //   name: "Is Rybbit GDPR and CCPA compliant?",
+    //   acceptedAnswer: {
+    //     "@type": "Answer",
+    //     text: "Yes, Rybbit is fully compliant with GDPR, CCPA, and other privacy regulations. We don't use cookies or collect any personal data that could identify your users. We salt user IDs daily to ensure users are not fingerprinted. You will not need to display a cookie consent banner to your users.",
+    //   },
+    // },
     {
       "@type": "Question",
       name: "How does Rybbit compare to Google Analytics?",
@@ -82,10 +84,49 @@ const faqSchema = {
 };
 
 export const metadata = {
-  title: "Rybbit Analytics",
+  title: "Rybbit - Cookieless Google Analytics Replacement",
   description:
     "Next-gen, open source, lightweight, cookieless web & product analytics for everyone — GDPR/CCPA compliant.",
 };
+
+const features = [
+  {
+    icon: TrendingUp,
+    title: "Ditch Google Analytics",
+    description:
+      "Google Analytics is bloated, confusing, and designed to sell ads. At Rybbit, our only product is web analytics, and our only goal is to help you understand your users (instead of tracking them across the web).",
+  },
+  {
+    icon: Zap,
+    title: "Setup in minutes",
+    description:
+      "Add one line of code to your site and you're done using one of our 30+ framework guides.  Start seeing real-time data within seconds of installation.",
+  },
+  {
+    icon: MousePointer,
+    title: "One click from everything",
+    description:
+      "Our dashboard is stupidly simple to use. You don't have to spend hours learning how to use it. Funnels, goals, journeys, web vitals, and session replays are all just a click away.",
+  },
+  {
+    icon: Target,
+    title: "See more accurate data",
+    description:
+      "Built-in bot detection filters out fake traffic automatically. No more inflated numbers from scrapers and crawlers. See only real human visitors and make decisions based on actual user behavior.",
+  },
+  {
+    icon: Cookie,
+    title: "No more cookie banners",
+    description:
+      "We don't use cookies. Period. That means no annoying consent banners cluttering your site, no user friction, and full compliance with GDPR, CCPA, and other privacy regulations by default.",
+  },
+  {
+    icon: Code,
+    title: "Open source forever",
+    description:
+      "We're bootstrapped, independent, and 100% open source. Every line of code is on GitHub for you to inspect, modify, or self-host. We're building Rybbit for the community, not for venture capitalists.",
+  },
+];
 
 export default function HomePage() {
   return (
@@ -100,19 +141,19 @@ export default function HomePage() {
             tilt_wrap.className
           )}
         >
-          The Open Source Google Analytics Replacement
+          The Modern Google Analytics Replacement
         </h1>
         <h2 className="text-base md:text-xl pt-4 md:pt-6 px-4 tracking-tight max-w-4xl text-center text-neutral-300 font-light">
           Next-gen, open source, lightweight, cookieless web & product analytics for everyone.
         </h2>
 
         <div className="flex flex-col items-center my-8 md:my-10">
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 md:gap-6 text-base md:text-lg px-4">
+          <div className="flex flex-row items-center justify-center gap-4 md:gap-6 text-base md:text-lg">
             <TrackedButton
               href="https://app.rybbit.io/signup"
               eventName="signup"
               eventProps={{ location: "hero", button_text: "Track your site" }}
-              className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-5 py-3 rounded-lg shadow-lg shadow-emerald-900/20 transform hover:-translate-y-0.5 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-opacity-50 cursor-pointer"
+              className="w-full whitespace-nowrap sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-5 py-3 rounded-lg shadow-lg shadow-emerald-900/20 transform hover:-translate-y-0.5 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-opacity-50 cursor-pointer"
             >
               Track your site
             </TrackedButton>
@@ -120,7 +161,7 @@ export default function HomePage() {
               href="https://demo.rybbit.com/21"
               eventName="demo"
               eventProps={{ location: "hero", button_text: "See live demo" }}
-              className="w-full sm:w-auto bg-neutral-800 hover:bg-neutral-700 text-white font-medium px-5 py-3 rounded-lg border border-neutral-600 transform hover:-translate-y-0.5 transition-all duration-200 hover:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-400 focus:ring-opacity-50 cursor-pointer"
+              className="w-full whitespace-nowrap sm:w-auto bg-neutral-800 hover:bg-neutral-700 text-white font-medium px-5 py-3 rounded-lg border border-neutral-600 transform hover:-translate-y-0.5 transition-all duration-200 hover:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-400 focus:ring-opacity-50 cursor-pointer"
             >
               See live demo
             </TrackedButton>
@@ -166,7 +207,7 @@ export default function HomePage() {
           <div className="max-w-6xl mx-auto px-4">
             <div className="text-center mb-10 md:mb-12">
               <p className="text-neutral-400 text-sm uppercase tracking-wider font-medium">
-                Trusted by 2000+ companies worldwide
+                Trusted by 4,000+ organizations worldwide
               </p>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-8 items-center justify-items-center">
@@ -250,45 +291,46 @@ export default function HomePage() {
             </div>
           </div>
         </section>
-
-        <section className="py-14 md:py-20 w-full max-w-7xl px-4">
+        <section className="py-14 md:py-20 w-full max-w-6xl px-8">
+          {/* <div className="bg-neutral-900/30 backdrop-blur-sm border border-neutral-800/50 rounded-2xl p-4 md:p-8"> */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-10 md:gap-16">
+            {features.map(feature => {
+              const Icon = feature.icon;
+              return (
+                <div key={feature.title} className="space-y-4">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 border border-emerald-500/30 shadow-md shadow-emerald-500/10 flex items-center justify-center">
+                    <Icon className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <h3 className="text-2xl font-medium tracking-tight">{feature.title}</h3>
+                  <p className="text-neutral-300 text-base">{feature.description}</p>
+                </div>
+              );
+            })}
+          </div>
+          {/* </div> */}
+        </section>
+        <section className="py-14 md:py-20 w-full max-w-6xl px-4">
           <div className="text-center mb-10 md:mb-16">
-            <div className="inline-block bg-emerald-900/30 text-emerald-400 px-3 py-1 rounded-full text-sm font-medium mb-4">
-              Analytics Reimagined
-            </div>
-
+            <SectionBadge className="mb-4"> Analytics Reimagined</SectionBadge>
             <h2 className="text-3xl md:text-5xl font-bold tracking-tight">Features</h2>
             <p className="mt-4 text-base md:text-xl text-neutral-300 max-w-2xl mx-auto font-light">
               Everything you need to understand your audience and grow your business, without the complexity.
             </p>
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
-            {/* <Funnels /> */}
-            {/* <AdvancedFilters /> */}
-
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
             <RealTimeAnalytics />
             <SessionReplay />
-            <WebVitals />
-            <UserProfiles />
             <UserSessions />
-            <UserFlowAnalysis />
-
-            <UserBehaviorTrends />
-            <EventTracking />
-            <GoalConversion />
+            <Funnels />
           </div>
         </section>
 
         <Integrations />
-
         {/* Testimonial Section */}
         <section className="py-10 md:py-16 w-full">
           <div className="max-w-7xl mx-auto px-4">
             <div className="text-center mb-10 md:mb-16">
-              <div className="inline-block bg-emerald-900/30 text-emerald-400 px-3 py-1 rounded-full text-sm font-medium mb-4">
-                User Testimonials
-              </div>
+              <SectionBadge className="mb-4">User Testimonials</SectionBadge>
               <h2 className="text-3xl md:text-5xl font-bold tracking-tight">People love Rybbit</h2>
               <p className="mt-4 text-base md:text-xl text-neutral-300 max-w-2xl mx-auto font-light">
                 See what others think about Rybbit Analytics
@@ -297,20 +339,11 @@ export default function HomePage() {
             <div className="columns-1 md:columns-2 lg:columns-3 gap-4 space-y-4">
               <TweetCard id="1934145508999877089" className="break-inside-avoid mb-4" />
               <TweetCard id="1920470706761929048" className="break-inside-avoid mb-4" />
-              <TweetCard id="1919290867451404670" className="break-inside-avoid mb-4" />
-              <TweetCard id="1927817460993884321" className="break-inside-avoid mb-4" />
-
               <TweetCard id="1921928423284629758" className="break-inside-avoid mb-4" />
-              <TweetCard id="1920318739335033226" className="break-inside-avoid mb-4" />
-              <TweetCard id="1920425974954381456" className="break-inside-avoid mb-4" />
-
-              {/* <TweetCard
-                id="1921878010417848443"
-                className="break-inside-avoid mb-4"
-              /> */}
               <TweetCard id="1920899082253434950" className="break-inside-avoid mb-4" />
-              <TweetCard id="1920379817113088341" className="break-inside-avoid mb-4" />
-              <TweetCard id="1919793785384386576" className="break-inside-avoid mb-4" />
+              <TweetCard id="1982378431166963982" className="break-inside-avoid mb-4" />
+              <TweetCard id="1927817460993884321" className="break-inside-avoid mb-4" />
+              <TweetCard id="1971933281324355679" className="break-inside-avoid mb-4" />
             </div>
           </div>
         </section>
@@ -322,9 +355,7 @@ export default function HomePage() {
         <section className="py-16 md:py-24 w-full">
           <div className="max-w-4xl mx-auto px-4">
             <div className="text-center mb-12">
-              <div className="inline-block bg-emerald-900/30 text-emerald-400 px-3 py-1 rounded-full text-sm font-medium mb-4">
-                Common Questions
-              </div>
+              <SectionBadge className="mb-4">Common Questions</SectionBadge>
               <h2 className="text-3xl md:text-4xl font-bold">Frequently Asked Questions</h2>
               <p className="mt-4 text-neutral-300 max-w-2xl mx-auto font-light">
                 Everything you need to know about Rybbit Analytics
@@ -333,7 +364,7 @@ export default function HomePage() {
 
             <div className="bg-neutral-800/20 backdrop-blur-sm border border-neutral-800/50 rounded-xl overflow-hidden">
               <Accordion type="single" collapsible className="w-full">
-                <AccordionItem value="item-1" className="border-b border-neutral-800/50">
+                {/* <AccordionItem value="item-1" className="border-b border-neutral-800/50">
                   <AccordionTrigger className="px-6 py-4 text-base md:text-lg font-medium hover:text-emerald-400 transition-colors">
                     Is Rybbit GDPR and CCPA compliant?
                   </AccordionTrigger>
@@ -343,7 +374,7 @@ export default function HomePage() {
                     ensure users are not fingerprinted. You will not need to display a cookie consent banner to your
                     users.
                   </AccordionContent>
-                </AccordionItem>
+                </AccordionItem> */}
 
                 <AccordionItem value="item-2" className="border-b border-neutral-800/50">
                   <AccordionTrigger className="px-6 py-4 text-base md:text-lg font-medium hover:text-emerald-400 transition-colors">
@@ -368,7 +399,7 @@ export default function HomePage() {
 
                 <AccordionItem value="item-3" className="border-b border-neutral-800/50">
                   <AccordionTrigger className="px-6 py-4 text-base md:text-lg font-medium hover:text-emerald-400 transition-colors">
-                    Rybbit vs. Plausible/Umami/Simple Analytics
+                    Rybbit vs. Plausible/Umami/Fathom
                   </AccordionTrigger>
                   <AccordionContent className="px-6 pb-4 text-neutral-300">
                     <p>

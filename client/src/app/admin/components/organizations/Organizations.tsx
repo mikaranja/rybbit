@@ -370,7 +370,11 @@ export function Organizations() {
             <TabsTrigger value="growth">Organization Growth</TabsTrigger>
             <TabsTrigger value="usage">Service Usage</TabsTrigger>
           </TabsList>
-
+        </div>
+        <TabsContent value="growth">
+          <GrowthChart data={organizations} color="#8b5cf6" title="Organizations" />
+        </TabsContent>
+        <TabsContent value="usage">
           <div className="flex items-center gap-1 bg-neutral-800 p-1 rounded-lg">
             <Button
               size="sm"
@@ -405,11 +409,6 @@ export function Organizations() {
               All Time
             </Button>
           </div>
-        </div>
-        <TabsContent value="growth">
-          <GrowthChart data={organizations} color="#8b5cf6" title="Organizations" />
-        </TabsContent>
-        <TabsContent value="usage">
           <ServiceUsageChart
             startDate={startDate}
             endDate={endDate}

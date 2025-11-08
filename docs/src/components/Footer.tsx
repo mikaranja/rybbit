@@ -124,6 +124,11 @@ export function Footer() {
                 </Link>
               </li>
               <li>
+                <Link href="/features" className="text-neutral-400 hover:text-white transition-colors">
+                  Features
+                </Link>
+              </li>
+              <li>
                 <Link href="/pricing" className="text-neutral-400 hover:text-white transition-colors">
                   Pricing
                 </Link>
@@ -161,6 +166,11 @@ export function Footer() {
               <li>
                 <Link href="https://ipapi.is/" className="text-neutral-400 hover:text-white transition-colors">
                   Geolocation by ipapi.is
+                </Link>
+              </li>
+              <li>
+                <Link href="/oss-friends" className="text-neutral-400 hover:text-white transition-colors">
+                  OSS Friends
                 </Link>
               </li>
             </ul>
