@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { VisuallyHidden } from "radix-ui";
 import { useCurrentSite } from "../../../../api/admin/sites";
-import { GetSessionsResponse, useGetSessionsInfinite } from "../../../../api/analytics/userSessions";
+import { GetSessionsResponse, useGetSessionsInfinite } from "../../../../api/analytics/useGetUserSessions";
 import { Avatar, generateName } from "../../../../components/Avatar";
 import { Channel } from "../../../../components/Channel";
 import { EventIcon, PageviewIcon } from "../../../../components/EventIcons";
@@ -162,7 +162,7 @@ function SessionCard({ session, onClick }: { session: GetSessionsResponse[number
 }
 
 export function GlobeSessions() {
-  const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } = useGetSessionsInfinite();
+  const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useGetSessionsInfinite();
 
   const [expanded, setExpanded] = useState(false);
   const [selectedSession, setSelectedSession] = useState<GetSessionsResponse[number] | null>(null);
@@ -194,7 +194,14 @@ export function GlobeSessions() {
               <SessionCard key={session.session_id} session={session} onClick={() => setSelectedSession(session)} />
             ))
           )}
+          {isFetchingNextPage && <SessionCardSkeleton />}
         </div>
+        {/* Load more button */}
+        {hasNextPage && !isLoading && (
+          <Button onClick={() => fetchNextPage()} className="w-full" variant="ghost" size="sm">
+            Load more
+          </Button>
+        )}
       </div>
 
       <Dialog open={!!selectedSession} onOpenChange={open => !open && setSelectedSession(null)}>
