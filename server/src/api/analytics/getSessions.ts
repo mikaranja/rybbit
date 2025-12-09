@@ -1,7 +1,8 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { clickhouse } from "../../db/clickhouse/clickhouse.js";
-import { enrichWithTraits, getFilterStatement, getTimeStatement, processResults } from "./utils.js";
+import { enrichWithTraits, getTimeStatement, processResults } from "./utils/utils.js";
 import { FilterParams } from "@rybbit/shared";
+import { getFilterStatement } from "./utils/getFilterStatement.js";
 
 export type GetSessionsResponse = {
   session_id: string;
@@ -56,7 +57,7 @@ export interface GetSessionsRequest {
 }
 
 export async function getSessions(req: FastifyRequest<GetSessionsRequest>, res: FastifyReply) {
-  const { filters, page, user_id: userId, limit, identified_only: identifiedOnly = "false" } = req.query;
+  const { filters, page = 1, user_id: userId, limit = 100, identified_only: identifiedOnly = "false" } = req.query;
   const site = req.params.site;
   const filterIdentified = identifiedOnly === "true";
 

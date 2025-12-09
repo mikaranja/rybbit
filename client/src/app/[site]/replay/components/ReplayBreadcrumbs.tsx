@@ -24,11 +24,11 @@ import {
   TextSelect,
   Type,
 } from "lucide-react";
-import { Duration } from "luxon";
+import { DateTime, Duration } from "luxon";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
-import { useGetSessionReplayEvents } from "../../../../api/analytics/sessionReplay/useGetSessionReplayEvents";
+import { useGetSessionReplayEvents } from "../../../../api/analytics/hooks/sessionReplay/useGetSessionReplayEvents";
 import { Avatar } from "../../../../components/Avatar";
 import { IdentifiedBadge } from "../../../../components/IdentifiedBadge";
 import { Button } from "../../../../components/ui/button";
@@ -264,7 +264,13 @@ export function ReplayBreadcrumbs() {
     <div className="flex flex-col gap-2">
       <div className="rounded-lg border border-neutral-100 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex items-center justify-between gap-2 p-2 text-xs text-neutral-900 dark:text-neutral-200">
         <div className="flex items-center gap-2">
-          <Avatar id={data.metadata.user_id} size={20} />
+          <Avatar
+            id={data.metadata.user_id}
+            size={24}
+            lastActiveTime={
+              data.metadata.end_time ? DateTime.fromSQL(data.metadata.end_time, { zone: "utc" }).toLocal() : undefined
+            }
+          />
           <span className="truncate max-w-[120px]">{getUserDisplayName(data.metadata)}</span>
           {isIdentified && <IdentifiedBadge traits={data.metadata.traits} />}
         </div>
@@ -300,7 +306,7 @@ export function ReplayBreadcrumbs() {
                   <div className="text-xs text-neutral-600 dark:text-neutral-400 w-10">
                     {Duration.fromMillis(startTimeMs).toFormat("mm:ss")}
                   </div>
-                  <Icon className={cn("w-4 h-4 flex-shrink-0", color)} />
+                  <Icon className={cn("w-4 h-4 shrink-0", color)} />
                   <div className="flex-1 min-w-0">
                     <div className="text-xs text-neutral-900 dark:text-neutral-200 font-medium truncate">
                       {description}
