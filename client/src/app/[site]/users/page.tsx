@@ -9,6 +9,7 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
+import { getTimezone } from "@/lib/store";
 import { ArrowDown, ArrowUp, ArrowUpDown, Monitor, Smartphone, Tablet } from "lucide-react";
 import { DateTime } from "luxon";
 import Link from "next/link";
@@ -93,7 +94,7 @@ export default function UsersPage() {
 
   // Format relative time with special handling for times less than 1 minute
   const formatRelativeTime = (dateStr: string) => {
-    const date = DateTime.fromSQL(dateStr, { zone: "utc" }).toLocal();
+    const date = DateTime.fromSQL(dateStr, { zone: "utc" }).setZone(getTimezone());
     const diff = Math.abs(date.diffNow(["minutes"]).minutes);
 
     if (diff < 1) {
@@ -112,11 +113,12 @@ export default function UsersPage() {
         const isIdentified = !!info.row.original.identified_user_id;
         // For links: use identified_user_id for identified users, device ID for anonymous
         const linkId = isIdentified ? identifiedUserId : info.getValue();
+        const encodedLinkId = encodeURIComponent(linkId);
         const displayName = getUserDisplayName(info.row.original);
         const lastSeen = DateTime.fromSQL(info.row.original.last_seen, { zone: "utc" });
 
         return (
-          <Link href={`/${site}/user/${linkId}`} className="flex items-center gap-2">
+          <Link href={`/${site}/user/${encodedLinkId}`} className="flex items-center gap-2">
             <Avatar size={20} id={linkId as string} lastActiveTime={lastSeen} />
             <span className="max-w-32 truncate hover:underline" title={displayName}>
               {displayName}
@@ -219,7 +221,7 @@ export default function UsersPage() {
       cell: info => {
         const date = DateTime.fromSQL(info.getValue(), {
           zone: "utc",
-        }).toLocal();
+        }).setZone(getTimezone());
         const formattedDate = date.toLocaleString(DateTime.DATETIME_SHORT);
         const relativeTime = formatRelativeTime(info.getValue());
 
@@ -242,7 +244,7 @@ export default function UsersPage() {
       cell: info => {
         const date = DateTime.fromSQL(info.getValue(), {
           zone: "utc",
-        }).toLocal();
+        }).setZone(getTimezone());
         const formattedDate = date.toLocaleString(DateTime.DATETIME_SHORT);
         const relativeTime = formatRelativeTime(info.getValue());
 
@@ -345,7 +347,7 @@ export default function UsersPage() {
                   table.getRowModel().rows.map(row => {
                     // Use identified_user_id for identified users, device ID (user_id) for anonymous
                     const linkId = row.original.identified_user_id || row.original.user_id;
-                    const href = `/${site}/user/${linkId}`;
+                    const href = `/${site}/user/${encodeURIComponent(linkId)}`;
 
                     return (
                       <tr key={row.id} className="border-b border-neutral-100 dark:border-neutral-800 group">

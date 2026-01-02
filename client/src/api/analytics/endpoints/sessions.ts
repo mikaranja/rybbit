@@ -40,6 +40,7 @@ export type GetSessionsResponse = {
   ip: string;
   lat: number;
   lon: number;
+  has_replay: number;
 }[];
 
 // Session details type
@@ -138,7 +139,7 @@ export async function fetchSessions(
   };
 
   const response = await authedFetch<{ data: GetSessionsResponse }>(
-    `/sessions/${site}`,
+    `/sites/${site}/sessions`,
     queryParams
   );
   return response;
@@ -162,7 +163,7 @@ export async function fetchSession(
   }
 
   const response = await authedFetch<{ data: SessionPageviewsAndEvents }>(
-    `/sessions/${params.sessionId}/${site}`,
+    `/sites/${site}/sessions/${params.sessionId}`,
     queryParams
   );
   return response;
@@ -177,7 +178,7 @@ export async function fetchSessionLocations(
   params: CommonApiParams
 ): Promise<LiveSessionLocation[]> {
   const response = await authedFetch<{ data: LiveSessionLocation[] }>(
-    `/session-locations/${site}`,
+    `/sites/${site}/session-locations`,
     toQueryParams(params)
   );
   return response.data;
