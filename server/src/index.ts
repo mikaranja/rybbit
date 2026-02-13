@@ -15,12 +15,15 @@ import {
   createGoal,
   deleteFunnel,
   deleteGoal,
+  generatePdfReport,
   getErrorBucketed,
   getErrorEvents,
   getErrorNames,
+  getEventBucketed,
   getEventNames,
   getEventProperties,
   getEvents,
+
   getFunnel,
   getFunnelStepSessions,
   getFunnels,
@@ -41,12 +44,16 @@ import {
   getSession,
   getSessionLocations,
   getSessions,
+  getSiteEventCount,
   getUserInfo,
   getUserSessionCount,
+  getUserTraitKeys,
+  getUserTraitValueUsers,
+  getUserTraitValues,
   getUsers,
   updateGoal,
 } from "./api/analytics/index.js";
-import { getConfig } from "./api/getConfig.js";
+import { getConfig, getVersion } from "./api/getConfig.js";
 import {
   connectGSC,
   disconnectGSC,
@@ -55,6 +62,7 @@ import {
   gscCallback,
   selectGSCProperty,
 } from "./api/gsc/index.js";
+import { updateInvitationSiteAccess, updateMemberSiteAccess } from "./api/memberAccess/index.js";
 import {
   deleteSessionReplay,
   getSessionReplayEvents,
@@ -78,6 +86,7 @@ import {
   getTrackingConfig,
   updateSiteConfig,
   updateSitePrivateLinkConfig,
+  verifyScript,
 } from "./api/sites/index.js";
 import {
   createCheckoutSession,
@@ -95,27 +104,30 @@ import {
   getUserOrganizations,
   listApiKeys,
   listOrganizationMembers,
+  oneClickUnsubscribeMarketing,
+  unsubscribeMarketing,
   updateAccountSettings,
 } from "./api/user/index.js";
 import { initializeClickhouse } from "./db/clickhouse/clickhouse.js";
 import { initPostgres } from "./db/postgres/initPostgres.js";
+import {
+  allowPublicSiteAccess,
+  requireAdmin,
+  requireAuth,
+  requireOrgAdminFromParams,
+  requireOrgMember,
+  requireSiteAccess,
+  requireSiteAdminAccess,
+  resolveSiteId,
+} from "./lib/auth-middleware.js";
 import { mapHeaders } from "./lib/auth-utils.js";
 import { auth } from "./lib/auth.js";
 import { IS_CLOUD } from "./lib/const.js";
-import { trackEvent } from "./services/tracker/trackEvent.js";
-import { handleIdentify } from "./services/tracker/identifyService.js";
+import { reengagementService } from "./services/reengagement/reengagementService.js";
 import { telemetryService } from "./services/telemetryService.js";
+import { handleIdentify } from "./services/tracker/identifyService.js";
+import { trackEvent } from "./services/tracker/trackEvent.js";
 import { weeklyReportService } from "./services/weekyReports/weeklyReportService.js";
-import {
-  requireAuth,
-  requireAdmin,
-  requireSiteAccess,
-  requireSiteAdminAccess,
-  allowPublicSiteAccess,
-  requireOrgMember,
-  requireOrgAdminFromParams,
-  resolveSiteId,
-} from "./lib/auth-middleware.js";
 
 // Pre-composed middleware chains for common auth patterns
 // Cast as any to work around Fastify's type inference limitations with preHandler
@@ -130,49 +142,22 @@ const orgAdminParams = { preHandler: [requireOrgAdminFromParams] as any };
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const hasAxiom = !!(process.env.AXIOM_DATASET && process.env.AXIOM_TOKEN);
-
 const server = Fastify({
+  disableRequestLogging: true,
   logger: {
-    level: process.env.LOG_LEVEL || (process.env.NODE_ENV === "development" ? "debug" : "info"),
-    transport:
-      process.env.NODE_ENV === "production" && IS_CLOUD && hasAxiom
-        ? {
-            targets: [
-              // Send to Axiom
-              {
-                target: "@axiomhq/pino",
-                level: process.env.LOG_LEVEL || "info",
-                options: {
-                  dataset: process.env.AXIOM_DATASET,
-                  token: process.env.AXIOM_TOKEN,
-                },
-              },
-              // Pretty print to stdout for Docker logs
-              {
-                target: "pino-pretty",
-                level: process.env.LOG_LEVEL || "info",
-                options: {
-                  colorize: true,
-                  singleLine: true,
-                  translateTime: "HH:MM:ss",
-                  ignore: "pid,hostname,name",
-                  destination: 1, // stdout
-                },
-              },
-            ],
-          }
-        : process.env.NODE_ENV === "development"
-          ? {
-              target: "pino-pretty",
-              options: {
-                colorize: true,
-                singleLine: true,
-                translateTime: "HH:MM:ss",
-                ignore: "pid,hostname,name",
-              },
-            }
-          : undefined, // Production without Axiom - plain JSON to stdout
+    // level: process.env.LOG_LEVEL || (process.env.NODE_ENV === "development" ? "debug" : "info"),
+    level: "debug",
+    transport: {
+      target: "pino-pretty",
+      level: process.env.LOG_LEVEL || "debug",
+      options: {
+        colorize: true,
+        singleLine: true,
+        translateTime: "HH:MM:ss",
+        ignore: "pid,hostname,name",
+        destination: 1, // stdout
+      },
+    },
     serializers: {
       req(request) {
         return {
@@ -259,9 +244,15 @@ async function analyticsRoutes(fastify: FastifyInstance) {
   fastify.get("/sites/:siteId/sessions", publicSite, getSessions);
   fastify.get("/sites/:siteId/sessions/:sessionId", publicSite, getSession);
   fastify.get("/sites/:siteId/events", publicSite, getEvents);
+  fastify.get("/sites/:siteId/events/bucketed", publicSite, getEventBucketed);
+  fastify.get("/sites/:siteId/events/count", publicSite, getSiteEventCount);
   fastify.get("/sites/:siteId/users", publicSite, getUsers);
+
   fastify.get("/sites/:siteId/users/session-count", publicSite, getUserSessionCount);
   fastify.get("/sites/:siteId/users/:userId", publicSite, getUserInfo);
+  fastify.get("/sites/:siteId/user-traits/keys", publicSite, getUserTraitKeys);
+  fastify.get("/sites/:siteId/user-traits/values", publicSite, getUserTraitValues);
+  fastify.get("/sites/:siteId/user-traits/users", publicSite, getUserTraitValueUsers);
   fastify.get("/sites/:siteId/session-locations", publicSite, getSessionLocations);
   fastify.get("/sites/:siteId/funnels", publicSite, getFunnels);
   fastify.get("/sites/:siteId/journeys", publicSite, getJourneys);
@@ -278,11 +269,10 @@ async function analyticsRoutes(fastify: FastifyInstance) {
   fastify.get("/sites/:siteId/events/properties", publicSite, getEventProperties);
   fastify.get("/sites/:siteId/events/outbound", publicSite, getOutboundLinks);
   fastify.get("/org-event-count/:organizationId", orgMember, getOrgEventCount);
-
-  // Performance Analytics
   fastify.get("/sites/:siteId/performance/overview", publicSite, getPerformanceOverview);
   fastify.get("/sites/:siteId/performance/time-series", publicSite, getPerformanceTimeSeries);
   fastify.get("/sites/:siteId/performance/by-dimension", publicSite, getPerformanceByDimension);
+  fastify.get("/sites/:siteId/export/pdf", publicSite, generatePdfReport);
 }
 
 async function sessionReplayRoutes(fastify: FastifyInstance) {
@@ -303,6 +293,7 @@ async function sitesRoutes(fastify: FastifyInstance) {
   fastify.get("/site/tracking-config/:siteId", getTrackingConfig); // Public - used by tracking script
   fastify.get("/sites/:siteId/excluded-ips", authSite, getSiteExcludedIPs);
   fastify.get("/sites/:siteId/excluded-countries", authSite, getSiteExcludedCountries);
+  fastify.get("/sites/:siteId/verify-script", authSite, verifyScript);
 
   // Site Imports
   fastify.get("/sites/:siteId/imports", adminSite, getSiteImports);
@@ -318,13 +309,27 @@ async function organizationsRoutes(fastify: FastifyInstance) {
   fastify.post("/organizations/:organizationId/sites", orgAdminParams, addSite);
   fastify.get("/organizations/:organizationId/members", orgMember, listOrganizationMembers);
   fastify.post("/organizations/:organizationId/members", orgMember, addUserToOrganization);
+
+  // Member site access management (admin/owner only)
+  fastify.put("/organizations/:organizationId/members/:memberId/sites", orgAdminParams, updateMemberSiteAccess);
+
+  // Invitation site access management (admin/owner only)
+  fastify.put(
+    "/organizations/:organizationId/invitations/:invitationId/sites",
+    orgAdminParams,
+    updateInvitationSiteAccess
+  );
 }
 
 async function userRoutes(fastify: FastifyInstance) {
   // User
   fastify.get("/config", getConfig); // Public - returns app config
+  fastify.get("/version", getVersion); // Public - returns app version
   fastify.get("/user/organizations", authOnly, getUserOrganizations);
   fastify.post("/user/account-settings", authOnly, updateAccountSettings);
+  fastify.post("/user/unsubscribe-marketing", authOnly, unsubscribeMarketing);
+  fastify.get("/user/unsubscribe-marketing-oneclick", oneClickUnsubscribeMarketing); // Public - for link clicks
+  fastify.post("/user/unsubscribe-marketing-oneclick", oneClickUnsubscribeMarketing); // Public - for List-Unsubscribe header
   fastify.get("/user/api-keys", authOnly, listApiKeys);
   fastify.post("/user/api-keys", authOnly, createApiKey);
   fastify.delete("/user/api-keys/:keyId", authOnly, deleteApiKey);
@@ -387,22 +392,17 @@ server.register(apiRoutes, { prefix: "/api" });
 
 const start = async () => {
   try {
-    console.info("Starting server...");
     await Promise.all([initializeClickhouse(), initPostgres()]);
 
     telemetryService.startTelemetryCron();
-    if (IS_CLOUD) {
+    if (IS_CLOUD && process.env.NODE_ENV !== "development") {
       weeklyReportService.startWeeklyReportCron();
+      reengagementService.startReengagementCron();
     }
 
     // Start the server first
     await server.listen({ port: 3001, host: "0.0.0.0" });
     server.log.info("Server is listening on http://0.0.0.0:3001");
-
-    // Test Axiom logging
-    if (hasAxiom) {
-      server.log.info({ axiom: true, dataset: process.env.AXIOM_DATASET }, "Axiom logging is configured");
-    }
 
     // if (process.env.NODE_ENV === "production") {
     //   // Initialize uptime monitoring service in the background (non-blocking)

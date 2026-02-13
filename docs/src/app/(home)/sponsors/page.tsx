@@ -1,3 +1,4 @@
+import { BackgroundGrid } from "@/components/BackgroundGrid";
 import { CheckCircle } from "lucide-react";
 import { Tilt_Warp } from "next/font/google";
 import Image from "next/image";
@@ -29,34 +30,62 @@ interface Sponsor {
   logo: string;
   url: string;
   description?: string;
+  amount: number;
+}
+
+function getTier(amount: number): { name: string; colorClass: string } | null {
+  if (amount >= 1000) {
+    return { name: "Diamond", colorClass: "text-cyan-400" };
+  }
+  if (amount >= 500) {
+    return { name: "Gold", colorClass: "text-yellow-500" };
+  }
+  if (amount >= 100) {
+    return { name: "Silver", colorClass: "text-gray-400" };
+  }
+  if (amount >= 50) {
+    return { name: "Bronze", colorClass: "text-amber-600" };
+  }
+  return null;
 }
 
 const sponsors: Sponsor[] = [
   {
+    name: "Onyx",
+    logo: "/sponsors/onyx.jpeg",
+    url: "https://onyx.app",
+    amount: 500,
+  },
+  {
     name: "23M",
     logo: "/sponsors/23m.png",
     url: "https://23m.com",
+    amount: 100,
   },
   {
-    name: "Onyx",
-    logo: "/sponsors/onyx.jpeg",
-    url: "https://onyx.com",
+    name: "Cosmoflare",
+    logo: "/sponsors/cosmoflare.png",
+    url: "https://cosmoflare.com",
+    amount: 10,
+  },
+  {
+    name: "Fastscribe",
+    logo: "/sponsors/fastscribe.png",
+    url: "https://fastscribe.io",
+    amount: 10,
+  },
+  {
+    name: "Ark",
+    logo: "/sponsors/arkhq.png",
+    url: "https://arkhq.io",
+    amount: 10,
   },
 ];
 
 export default function SponsorsPage() {
   return (
     <div className="flex flex-col items-center justify-center overflow-x-hidden pt-16 md:pt-24">
-      <div
-        className={cn(
-          "absolute inset-0 -top-32 md:-top-48",
-          "[background-size:40px_40px]",
-          "[background-image:linear-gradient(to_right,#d4d4d4_1px,transparent_1px),linear-gradient(to_bottom,#d4d4d4_1px,transparent_1px)]",
-          "dark:[background-image:linear-gradient(to_right,#262626_1px,transparent_1px),linear-gradient(to_bottom,#262626_1px,transparent_1px)]",
-          "[mask-image:linear-gradient(to_bottom,black,transparent_80%),linear-gradient(to_right,transparent,black_10%,black_90%,transparent)]",
-          "[mask-composite:intersect]"
-        )}
-      />
+      <BackgroundGrid />
       <div className="relative flex flex-col py-8">
         <h1
           className={cn(
@@ -90,25 +119,29 @@ export default function SponsorsPage() {
         <div className="bg-neutral-200/40 dark:bg-neutral-900/40 p-2 rounded-3xl border border-neutral-300 dark:border-neutral-800">
           <div className="bg-neutral-50 dark:bg-neutral-900 backdrop-blur-sm rounded-2xl border border-neutral-300 dark:border-neutral-800 p-8">
             <div className="flex gap-6">
-              {sponsors.map(sponsor => (
-                <a
-                  key={sponsor.name}
-                  href={sponsor.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-4 hover:opacity-80 transition-opacity duration-200"
-                >
-                  <div className="relative w-16 h-16 flex-shrink-0">
-                    <Image src={sponsor.logo} alt={sponsor.name} fill className="object-contain rounded-lg" />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-lg font-medium text-neutral-900 dark:text-white">{sponsor.name}</span>
-                    {sponsor.description && (
-                      <p className="text-sm text-neutral-600 dark:text-neutral-400">{sponsor.description}</p>
-                    )}
-                  </div>
-                </a>
-              ))}
+              {sponsors.map(sponsor => {
+                const tier = getTier(sponsor.amount);
+                return (
+                  <a
+                    key={sponsor.name}
+                    href={sponsor.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-4 hover:opacity-80 transition-opacity duration-200"
+                  >
+                    <div className="relative w-16 h-16 flex-shrink-0">
+                      <Image src={sponsor.logo} alt={sponsor.name} fill className="object-contain rounded-lg" />
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-lg font-medium text-neutral-900 dark:text-white">{sponsor.name}</span>
+                      {sponsor.description && (
+                        <p className="text-sm text-neutral-600 dark:text-neutral-400">{sponsor.description}</p>
+                      )}
+                      {tier && <span className={cn("text-sm font-medium", tier.colorClass)}>{tier.name}</span>}
+                    </div>
+                  </a>
+                );
+              })}
             </div>
           </div>
         </div>

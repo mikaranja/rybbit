@@ -21,7 +21,7 @@ const getParsedProperties = (properties: string | undefined) => {
 class PageviewQueue {
   private queue: TotalPayload[] = [];
   private batchSize = 5000;
-  private interval = 10000;
+  private interval = 1000;
   private processing = false;
   private logger = createServiceLogger("pageview-queue");
 
@@ -118,7 +118,7 @@ class PageviewQueue {
       };
     });
 
-    this.logger.info({ count: processedPageviews.length }, "Bulk insert to ClickHouse");
+    // this.logger.info({ count: processedPageviews.length }, "Bulk insert to ClickHouse");
     // Bulk insert into database
     try {
       await clickhouse.insert({

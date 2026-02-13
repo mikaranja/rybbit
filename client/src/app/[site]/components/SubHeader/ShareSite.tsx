@@ -1,6 +1,6 @@
 import { Copy, Share } from "lucide-react";
 import { useParams } from "next/navigation";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import {
   useGeneratePrivateLinkKey,
   useGetPrivateLinkConfig,
@@ -23,7 +23,7 @@ export function ShareSite() {
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
             <Button variant="secondary" size="icon" onClick={() => {}} className="h-8 w-8">
-              <Share />
+              <Share className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>

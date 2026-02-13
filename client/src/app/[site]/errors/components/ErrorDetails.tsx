@@ -2,37 +2,26 @@
 
 import { ErrorEvent } from "@/api/analytics/endpoints";
 import { useGetErrorEventsInfinite } from "@/api/analytics/hooks/errors/useGetErrorEvents";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { userLocale } from "@/lib/dateTimeUtils";
 import { useGetRegionName } from "@/lib/geo";
 import { getTimezone } from "@/lib/store";
 import { getCountryName, truncateString } from "@/lib/utils";
-import { AlertTriangle, Code, Hash, Laptop, Loader2, Smartphone, TriangleAlert, User } from "lucide-react";
+import { AlertTriangle, Code, Loader2, TriangleAlert } from "lucide-react";
 import { DateTime } from "luxon";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
+import { Avatar } from "../../../../components/Avatar";
 import { ErrorState } from "../../../../components/ErrorState";
 import { Browser } from "../../components/shared/icons/Browser";
 import { CountryFlag } from "../../components/shared/icons/CountryFlag";
 import { OperatingSystem } from "../../components/shared/icons/OperatingSystem";
+import { DeviceIcon } from "../../components/shared/icons/Device";
 
 interface ErrorDetailsProps {
   errorMessage: string;
-}
-
-// DeviceIcon component for displaying mobile/desktop icons
-function DeviceIcon({ deviceType }: { deviceType: string | null }) {
-  if (!deviceType) return <Laptop className="w-4 h-4" />;
-
-  const type = deviceType.toLowerCase();
-  if (type.includes("mobile") || type.includes("tablet")) {
-    return <Smartphone className="w-4 h-4" />;
-  }
-  return <Laptop className="w-4 h-4" />;
 }
 
 // Component to display individual error event
@@ -54,17 +43,13 @@ function ErrorEventItem({ errorEvent }: { errorEvent: ErrorEvent }) {
     return location || "Unknown location";
   };
 
-  const formatTimestamp = (timestamp: string) => {
-    return DateTime.fromSQL(timestamp, { zone: getTimezone() }).setLocale(userLocale).toRelative();
-  };
-
   return (
-    <div className="border border-neutral-100 dark:border-neutral-800 rounded-lg p-4 bg-neutral-50 dark:bg-neutral-900/50">
+    <div className="border border-neutral-100 dark:border-neutral-850 rounded-lg p-4 bg-neutral-50 dark:bg-neutral-900/50">
       {/* Header with timestamp and basic info */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-4">
           <span className="text-sm text-neutral-700 dark:text-neutral-200">
-            {formatTimestamp(errorEvent.timestamp)}
+            {DateTime.fromSQL(errorEvent.timestamp, { zone: "utc" }).setZone(getTimezone()).toRelative()}
           </span>
           <div className="flex items-center gap-2">
             {errorEvent.country && (
@@ -105,7 +90,7 @@ function ErrorEventItem({ errorEvent }: { errorEvent: ErrorEvent }) {
             )}
             <Tooltip>
               <TooltipTrigger>
-                <DeviceIcon deviceType={errorEvent.device_type} />
+                <DeviceIcon deviceType={errorEvent.device_type ?? ""} />
               </TooltipTrigger>
               <TooltipContent>
                 <p>{errorEvent.device_type || "Unknown device"}</p>
@@ -124,26 +109,16 @@ function ErrorEventItem({ errorEvent }: { errorEvent: ErrorEvent }) {
           </Link>
         </div>
         <div className="flex items-center gap-2">
-          {/* Session ID */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Badge variant="outline" className="text-xs">
-                <Hash className="w-3 h-3 mr-1" />
-                {errorEvent.session_id.substring(0, 8)}
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent>Session ID: {errorEvent.session_id}</TooltipContent>
-          </Tooltip>
 
-          {/* User ID if available */}
+
           {errorEvent.user_id && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Link href={`/${site}/user/${encodeURIComponent(errorEvent.user_id)}`}>
-                  <Badge variant="outline" className="text-xs">
-                    <User className="w-3 h-3 mr-1" />
-                    {errorEvent.user_id.substring(0, 12)}
-                  </Badge>
+                  <Avatar
+                    size={24}
+                    id={errorEvent.user_id}
+                  />
                 </Link>
               </TooltipTrigger>
               <TooltipContent>User ID: {errorEvent.user_id}</TooltipContent>
@@ -167,7 +142,7 @@ function ErrorEventItem({ errorEvent }: { errorEvent: ErrorEvent }) {
 
       {/* Stack trace if available */}
       {errorEvent.stack && (
-        <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700">
+        <div className="mt-3 pt-3 border-t border-neutral-100 dark:border-neutral-850">
           <div className="flex items-start gap-2">
             <Code className="w-4 h-4 text-neutral-900 dark:text-neutral-100 mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0">
@@ -226,12 +201,12 @@ export function ErrorDetails({ errorMessage }: ErrorDetailsProps) {
 
   if (isLoading) {
     return (
-      <div className="p-4 bg-white dark:bg-neutral-900 border-t border-neutral-100 dark:border-neutral-800">
+      <div className="p-4 bg-white dark:bg-neutral-900 border-t border-neutral-100 dark:border-neutral-850">
         <div className="space-y-3">
           {Array.from({ length: 3 }).map((_, index) => (
             <div
               key={index}
-              className="border border-neutral-100 dark:border-neutral-800 rounded-lg p-4 bg-neutral-50 dark:bg-neutral-900/50"
+              className="border border-neutral-100 dark:border-neutral-850 rounded-lg p-4 bg-neutral-50 dark:bg-neutral-900/50"
             >
               {/* Header with timestamp and icons */}
               <div className="flex items-center justify-between mb-3">
@@ -246,7 +221,6 @@ export function ErrorDetails({ errorMessage }: ErrorDetailsProps) {
                   <Skeleton className="h-4 w-48" /> {/* URL */}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Skeleton className="h-5 w-16 rounded-full" /> {/* Session badge */}
                   <Skeleton className="h-5 w-16 rounded-full" /> {/* User badge */}
                 </div>
               </div>
@@ -265,7 +239,7 @@ export function ErrorDetails({ errorMessage }: ErrorDetailsProps) {
 
               {/* Stack trace section (randomly show/hide) */}
               {Math.random() > 0.5 && (
-                <div className="mt-3 pt-3 border-t border-neutral-200 dark:border-neutral-700">
+                <div className="mt-3 pt-3 border-t border-neutral-100 dark:border-neutral-850">
                   <div className="flex items-start gap-2">
                     <Skeleton className="h-4 w-4 mt-0.5" /> {/* Code icon */}
                     <div className="flex-1 min-w-0">
@@ -294,7 +268,7 @@ export function ErrorDetails({ errorMessage }: ErrorDetailsProps) {
 
   if (!allErrorEvents || allErrorEvents.length === 0) {
     return (
-      <div className="p-4 bg-white dark:bg-neutral-900 border-t border-neutral-100 dark:border-neutral-800">
+      <div className="p-4 bg-white dark:bg-neutral-900 border-t border-neutral-100 dark:border-neutral-850">
         <div className="text-center text-neutral-500 dark:text-neutral-400">
           <AlertTriangle className="w-6 h-6 mx-auto mb-2" />
           <p>No error events found</p>
@@ -305,7 +279,7 @@ export function ErrorDetails({ errorMessage }: ErrorDetailsProps) {
   }
 
   return (
-    <div className="p-4 bg-white dark:bg-neutral-900 border-t border-neutral-100 dark:border-neutral-800 space-y-3 max-h-[70vh] overflow-y-auto">
+    <div className="p-4 bg-white dark:bg-neutral-900 border-t border-neutral-100 dark:border-neutral-850 space-y-3 max-h-[70vh] overflow-y-auto">
       {allErrorEvents.map((errorEvent, index) => (
         <ErrorEventItem key={`${errorEvent.session_id}-${errorEvent.timestamp}-${index}`} errorEvent={errorEvent} />
       ))}
