@@ -55,6 +55,11 @@
       return false;
     }
   }
+  function truncateText(value, maxLength) {
+    if (value.length <= maxLength) return value;
+    const lastCode = value.charCodeAt(maxLength - 1);
+    return value.slice(0, lastCode >= 55296 && lastCode <= 56319 ? maxLength - 1 : maxLength);
+  }
   function parseJsonSafely(value, fallback) {
     if (!value) return fallback;
     try {
@@ -66,7 +71,19 @@
     }
   }
 
+  // url.ts
+  function getTrackedPathname(url, trackUrlFragments = false) {
+    if (url.hash.startsWith("#/")) {
+      return url.hash.substring(1);
+    }
+    if (url.hash.startsWith("#!/")) {
+      return url.hash.substring(2);
+    }
+    return url.pathname + (trackUrlFragments ? url.hash : "");
+  }
+
   // config.ts
+  var FEATURE_FLAG_REQUEST_TIMEOUT_MS = 2e3;
   function createVisitorId() {
     try {
       if (crypto?.randomUUID) {
@@ -76,11 +93,12 @@
     }
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
   }
+  var MAX_VISITOR_ID_LENGTH = 64;
   function getOrCreateVisitorId(namespace) {
     const key = `${namespace}-visitor-id`;
     try {
       const stored = localStorage.getItem(key);
-      if (stored) return stored;
+      if (stored && stored.length <= MAX_VISITOR_ID_LENGTH) return stored;
       const visitorId = createVisitorId();
       localStorage.setItem(key, visitorId);
       return visitorId;
@@ -95,13 +113,9 @@
       return void 0;
     }
   }
-  function getEvaluationPathname(url) {
-    if (url.hash && url.hash.startsWith("#/")) {
-      return url.hash.substring(1);
-    }
-    return url.pathname;
-  }
-  async function fetchFeatureFlags(analyticsHost, siteId, namespace, visitorId) {
+  async function fetchFeatureFlags(analyticsHost, siteId, namespace, visitorId, trackUrlFragments) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), FEATURE_FLAG_REQUEST_TIMEOUT_MS);
     try {
       const url = new URL(window.location.href);
       const response = await fetch(`${analyticsHost}/site/${siteId}/feature-flags/evaluate`, {
@@ -110,11 +124,12 @@
           "Content-Type": "application/json"
         },
         credentials: "omit",
+        signal: controller.signal,
         body: JSON.stringify({
           anonymousId: visitorId,
           identifiedUserId: getIdentifiedUserId(namespace),
           hostname: url.hostname,
-          pathname: getEvaluationPathname(url),
+          pathname: getTrackedPathname(url, trackUrlFragments),
           querystring: url.search,
           query: Object.fromEntries(url.searchParams.entries()),
           referrer: document.referrer,
@@ -124,12 +139,25 @@
         })
       });
       if (!response.ok) {
-        return {};
+        return { enabled: true, flags: {} };
       }
       const data = await response.json();
-      return data?.flags && typeof data.flags === "object" ? data.flags : {};
+      return {
+        enabled: data?.featureFlagsEnabled !== false,
+        flags: data?.flags && typeof data.flags === "object" ? data.flags : {}
+      };
     } catch (e2) {
-      return {};
+      return { enabled: true, flags: {} };
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+  function getSiteIdFromSrc(src) {
+    try {
+      const url = new URL(src, window.location.href);
+      return url.searchParams.get("siteId") || url.searchParams.get("site-id") || url.searchParams.get("site_id");
+    } catch (e2) {
+      return null;
     }
   }
   async function parseScriptConfig(scriptTag) {
@@ -143,13 +171,13 @@
       console.error("Please provide a valid analytics host");
       return null;
     }
-    const siteId = scriptTag.getAttribute("data-site-id") || scriptTag.getAttribute("site-id");
+    const siteId = getSiteIdFromSrc(src) || scriptTag.getAttribute("data-site-id") || scriptTag.getAttribute("site-id");
     if (!siteId) {
-      console.error("Please provide a valid site ID using the data-site-id attribute");
+      console.error("Please provide a valid site ID using the ?siteId= query parameter or the data-site-id attribute");
       return null;
     }
     const namespace = scriptTag.getAttribute("data-namespace") || "rybbit";
-    const visitorId = getOrCreateVisitorId(namespace);
+    const visitorId = createVisitorId();
     const skipPatterns = parseJsonSafely(scriptTag.getAttribute("data-skip-patterns"), []);
     const maskPatterns = parseJsonSafely(scriptTag.getAttribute("data-mask-patterns"), []);
     const sessionReplayMaskTextSelectors = parseJsonSafely(
@@ -192,6 +220,7 @@
       autoTrackPageview: true,
       autoTrackSpa: true,
       trackQuerystring: true,
+      trackUrlFragments: false,
       trackOutbound: true,
       enableWebVitals: false,
       trackErrors: false,
@@ -200,6 +229,7 @@
       trackCopy: false,
       trackFormInteractions: false,
       tag,
+      featureFlagsEnabled: false,
       featureFlags: {},
       // rrweb session replay options (undefined means use rrweb defaults)
       sessionReplayBlockClass,
@@ -230,13 +260,15 @@
           autoTrackPageview: apiConfig.trackInitialPageView ?? defaultConfig.autoTrackPageview,
           autoTrackSpa: apiConfig.trackSpaNavigation ?? defaultConfig.autoTrackSpa,
           trackQuerystring: apiConfig.trackUrlParams ?? defaultConfig.trackQuerystring,
+          trackUrlFragments: apiConfig.trackUrlFragments ?? defaultConfig.trackUrlFragments,
           trackOutbound: apiConfig.trackOutbound ?? defaultConfig.trackOutbound,
           enableWebVitals: apiConfig.webVitals ?? defaultConfig.enableWebVitals,
           trackErrors: apiConfig.trackErrors ?? defaultConfig.trackErrors,
           enableSessionReplay: apiConfig.sessionReplay ?? defaultConfig.enableSessionReplay,
           trackButtonClicks: apiConfig.trackButtonClicks ?? defaultConfig.trackButtonClicks,
           trackCopy: apiConfig.trackCopy ?? defaultConfig.trackCopy,
-          trackFormInteractions: apiConfig.trackFormInteractions ?? defaultConfig.trackFormInteractions
+          trackFormInteractions: apiConfig.trackFormInteractions ?? defaultConfig.trackFormInteractions,
+          featureFlagsEnabled: apiConfig.featureFlagsEnabled === true
         };
       } else {
         console.warn("Failed to fetch tracking config from API, using defaults");
@@ -244,12 +276,220 @@
     } catch (error) {
       console.warn("Error fetching tracking config:", error);
     }
-    resolvedConfig.featureFlags = await fetchFeatureFlags(analyticsHost, siteId, namespace, visitorId);
+    if (resolvedConfig.featureFlagsEnabled) {
+      resolvedConfig.visitorId = getOrCreateVisitorId(namespace);
+      const result = await fetchFeatureFlags(
+        analyticsHost,
+        siteId,
+        namespace,
+        resolvedConfig.visitorId,
+        resolvedConfig.trackUrlFragments
+      );
+      resolvedConfig.featureFlagsEnabled = result.enabled;
+      resolvedConfig.featureFlags = result.flags;
+    }
     return resolvedConfig;
+  }
+
+  // ../../../shared/src/botSignalContract.ts
+  var CLIENT_BOT_SIGNAL_MASKS = {
+    automationApi: 1 << 0,
+    zeroOuterDimensions: 1 << 1,
+    missingChrome: 1 << 2,
+    swiftShader: 1 << 3,
+    emptyPlugins: 1 << 4,
+    defaultViewport800x600: 1 << 5,
+    defaultViewport1024x768: 1 << 6,
+    impossibleDimensions: 1 << 7,
+    outerDimensionsWeird: 1 << 8,
+    pluginApiAbsence: 1 << 9,
+    defaultViewport1280x1200: 1 << 10,
+    squareScreen: 1 << 11,
+    missingScreenDimensions: 1 << 12
+  };
+  var CLIENT_BOT_SIGNAL_NAMES = Object.keys(CLIENT_BOT_SIGNAL_MASKS);
+  var CLIENT_BOT_SIGNAL_WEIGHTS = {
+    automationApi: 3,
+    zeroOuterDimensions: 2,
+    missingChrome: 1,
+    swiftShader: 1,
+    emptyPlugins: 1,
+    defaultViewport800x600: 3,
+    defaultViewport1024x768: 3,
+    impossibleDimensions: 3,
+    outerDimensionsWeird: 2,
+    pluginApiAbsence: 0,
+    defaultViewport1280x1200: 3,
+    squareScreen: 3,
+    missingScreenDimensions: 1
+  };
+  var ALL_CLIENT_BOT_SIGNAL_BITS = CLIENT_BOT_SIGNAL_NAMES.reduce(
+    (mask, name) => mask | CLIENT_BOT_SIGNAL_MASKS[name],
+    0
+  );
+  var STRONG_CLIENT_BOT_SIGNAL_BITS = CLIENT_BOT_SIGNAL_MASKS.automationApi | CLIENT_BOT_SIGNAL_MASKS.impossibleDimensions | CLIENT_BOT_SIGNAL_MASKS.defaultViewport800x600 | CLIENT_BOT_SIGNAL_MASKS.defaultViewport1024x768 | CLIENT_BOT_SIGNAL_MASKS.defaultViewport1280x1200 | CLIENT_BOT_SIGNAL_MASKS.squareScreen;
+  var MAX_CLIENT_BOT_SCORE = 10;
+  var MIN_PLAUSIBLE_SCREEN_DIMENSION = 200;
+  var MAX_PLAUSIBLE_SCREEN_DIMENSION = 8192;
+  var IMPLAUSIBLE_DESKTOP_VIEWPORTS = [
+    { width: 800, height: 600, signal: "defaultViewport800x600" },
+    { width: 1024, height: 768, signal: "defaultViewport1024x768" },
+    { width: 1280, height: 1200, signal: "defaultViewport1280x1200" }
+  ];
+  function isPlausibleScreenDimensions(width, height) {
+    return Number.isFinite(width) && Number.isFinite(height) && width >= MIN_PLAUSIBLE_SCREEN_DIMENSION && height >= MIN_PLAUSIBLE_SCREEN_DIMENSION && width <= MAX_PLAUSIBLE_SCREEN_DIMENSION && height <= MAX_PLAUSIBLE_SCREEN_DIMENSION;
+  }
+  function isDesktopUserAgent(userAgent) {
+    return /Windows NT|Macintosh|X11|Linux x86_64/.test(userAgent) && !/Mobile|Android|iPhone|iPad/.test(userAgent);
+  }
+  function getScreenDimensionSignals(width, height, userAgent) {
+    if (!isPlausibleScreenDimensions(width, height)) {
+      return ["impossibleDimensions"];
+    }
+    const signals = [];
+    if (width === height) {
+      signals.push("squareScreen");
+    }
+    if (isDesktopUserAgent(userAgent)) {
+      for (const viewport of IMPLAUSIBLE_DESKTOP_VIEWPORTS) {
+        if (width === viewport.width && height === viewport.height) {
+          signals.push(viewport.signal);
+        }
+      }
+    }
+    return signals;
+  }
+
+  // botSignals.ts
+  var cachedBotSignals = null;
+  function getBotScore() {
+    return getBotSignals().score;
+  }
+  function getBotSignalMask() {
+    return getBotSignals().mask;
+  }
+  function isPrerendering() {
+    return document.prerendering === true;
+  }
+  function getBotSignals() {
+    if (isPrerendering()) {
+      return calculateBotSignals();
+    }
+    cachedBotSignals ?? (cachedBotSignals = calculateBotSignals());
+    return cachedBotSignals;
+  }
+  function calculateBotSignals() {
+    let score = 0;
+    let mask = 0;
+    function addSignal(name) {
+      const signalMask = CLIENT_BOT_SIGNAL_MASKS[name];
+      if ((mask & signalMask) !== 0) {
+        return;
+      }
+      mask |= signalMask;
+      score += CLIENT_BOT_SIGNAL_WEIGHTS[name];
+    }
+    try {
+      const userAgent = navigator.userAgent;
+      const isChromeLike = /Chrome\//.test(userAgent) && !/\bwv\b|; wv\)/.test(userAgent);
+      const screenWidth = Number(window.screen?.width);
+      const screenHeight = Number(window.screen?.height);
+      const outerWidth = Number(window.outerWidth);
+      const outerHeight = Number(window.outerHeight);
+      const innerWidth = Number(window.innerWidth);
+      const innerHeight = Number(window.innerHeight);
+      const automationGlobalNames = [
+        "__webdriver_evaluate",
+        "__selenium_evaluate",
+        "__webdriver_script_function",
+        "__webdriver_script_func",
+        "__webdriver_script_fn",
+        "__fxdriver_evaluate",
+        "__driver_unwrapped",
+        "__webdriver_unwrapped",
+        "__driver_evaluate",
+        "__selenium_unwrapped",
+        "__fxdriver_unwrapped",
+        "_phantom",
+        "callPhantom",
+        "__nightmare",
+        "domAutomation",
+        "domAutomationController"
+      ];
+      const hasAutomationGlobal = automationGlobalNames.some((name) => name in window || name in document);
+      if (navigator.webdriver === true || hasAutomationGlobal) {
+        addSignal("automationApi");
+      }
+      if ((outerHeight === 0 || outerWidth === 0) && !isPrerendering()) {
+        addSignal("zeroOuterDimensions");
+      }
+      for (const signal of getScreenDimensionSignals(screenWidth, screenHeight, userAgent)) {
+        addSignal(signal);
+      }
+      if (Number.isFinite(outerWidth) && Number.isFinite(outerHeight) && Number.isFinite(innerWidth) && Number.isFinite(innerHeight) && outerWidth > 0 && outerHeight > 0 && innerWidth > 0 && innerHeight > 0 && (outerWidth + 8 < innerWidth || outerHeight + 8 < innerHeight)) {
+        addSignal("outerDimensionsWeird");
+      }
+      let hasPluginOrApiAbsence = false;
+      if (!window.chrome && isChromeLike) {
+        addSignal("missingChrome");
+        hasPluginOrApiAbsence = true;
+      }
+      try {
+        const canvas = document.createElement("canvas");
+        const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+        if (gl) {
+          try {
+            const rendererParts = [];
+            const rendererRaw = gl.getParameter(gl.RENDERER);
+            if (typeof rendererRaw === "string") {
+              rendererParts.push(rendererRaw);
+            }
+            try {
+              const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+              if (debugInfo) {
+                const unmaskedRaw = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+                if (typeof unmaskedRaw === "string") {
+                  rendererParts.push(unmaskedRaw);
+                }
+              }
+            } catch {
+            }
+            if (rendererParts.join(" ").toLowerCase().includes("swiftshader")) {
+              addSignal("swiftShader");
+            }
+          } finally {
+            releaseWebGlContext(canvas, gl);
+          }
+        }
+      } catch {
+      }
+      if ((!navigator.plugins || navigator.plugins.length === 0) && isChromeLike) {
+        addSignal("emptyPlugins");
+        hasPluginOrApiAbsence = true;
+      }
+      if (hasPluginOrApiAbsence) {
+        addSignal("pluginApiAbsence");
+      }
+    } catch (e2) {
+    }
+    return {
+      score: Math.min(score, MAX_CLIENT_BOT_SCORE),
+      mask
+    };
+  }
+  function releaseWebGlContext(canvas, gl) {
+    try {
+      const loseContextExt = gl.getExtension("WEBGL_lose_context");
+      loseContextExt?.loseContext?.();
+    } catch {
+    }
+    canvas.width = 0;
+    canvas.height = 0;
   }
 
   // sessionReplay.ts
   var SAMPLE_STORAGE_KEY = "rybbit-replay-sampled";
+  var FULL_SNAPSHOT_REQUEST_INTERVAL_MS = 1e4;
   function shouldSampleSession(sampleRate) {
     if (sampleRate >= 100) return true;
     if (sampleRate <= 0) return false;
@@ -268,10 +508,24 @@
   var SessionReplayRecorder = class {
     constructor(config, userId, sendBatch) {
       this.isRecording = false;
+      // Set once the server reports the session is over its size cap; recording
+      // stays off for the rest of this page.
+      this.capped = false;
       this.eventBuffer = [];
+      // Batches whose send failed, each kept as it was built so a retry after
+      // identify(), clearUserId() or a navigation still carries the identity and
+      // page it was recorded under.
+      this.failedBatches = [];
+      this.lastFullSnapshotRequestAt = -Infinity;
       this.config = config;
       this.userId = userId;
       this.sendBatch = sendBatch;
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") {
+          void this.flushEvents();
+        }
+      });
+      window.addEventListener("pagehide", () => void this.flushEvents());
     }
     async initialize() {
       if (!this.config.enableSessionReplay) {
@@ -301,7 +555,7 @@
       });
     }
     startRecording() {
-      if (this.isRecording || !window.rrweb || !this.config.enableSessionReplay) {
+      if (this.capped || this.isRecording || !window.rrweb || !this.config.enableSessionReplay) {
         return;
       }
       try {
@@ -384,7 +638,11 @@
       }
       this.isRecording = false;
       this.clearBatchTimer();
-      if (this.eventBuffer.length > 0) {
+      if (this.deferredSnapshotTimer !== void 0) {
+        clearTimeout(this.deferredSnapshotTimer);
+        this.deferredSnapshotTimer = void 0;
+      }
+      if (this.eventBuffer.length > 0 || this.failedBatches.length > 0) {
         this.flushEvents();
       }
     }
@@ -400,7 +658,7 @@
     setupBatchTimer() {
       this.clearBatchTimer();
       this.batchTimer = window.setInterval(() => {
-        if (this.eventBuffer.length > 0) {
+        if (this.eventBuffer.length > 0 || this.failedBatches.length > 0) {
           this.flushEvents();
         }
       }, this.config.sessionReplayBatchInterval);
@@ -411,30 +669,98 @@
         this.batchTimer = void 0;
       }
     }
+    // Sends the buffered events, and retries the batches that failed before.
     async flushEvents() {
-      if (this.eventBuffer.length === 0) {
+      const batches = this.failedBatches;
+      this.failedBatches = [];
+      if (this.eventBuffer.length > 0) {
+        batches.push({
+          userId: this.userId,
+          events: this.eventBuffer,
+          metadata: {
+            pageUrl: window.location.href,
+            viewportWidth: screen.width,
+            viewportHeight: screen.height,
+            language: navigator.language
+          },
+          _bsm: getBotSignalMask()
+        });
+        this.eventBuffer = [];
+      }
+      await Promise.all(batches.map((batch) => this.sendOrRequeue(batch)));
+    }
+    async sendOrRequeue(batch) {
+      try {
+        const result = await this.sendBatch(batch);
+        if (result?.stopRecording) {
+          this.stopForSizeCap();
+        } else if (result?.takeFullSnapshot) {
+          this.takeFullSnapshot();
+        } else if (this.deferredSnapshotTimer !== void 0 && batch.events.some((event) => event.type === 2)) {
+          clearTimeout(this.deferredSnapshotTimer);
+          this.deferredSnapshotTimer = void 0;
+        }
+      } catch (error) {
+        if (!this.capped) {
+          this.requeue(batch);
+        }
+      }
+    }
+    // A failure from the same identity and page as the last queued one joins it,
+    // so an outage retries one batch per flush rather than one per failed send.
+    requeue(batch) {
+      const last = this.failedBatches[this.failedBatches.length - 1];
+      if (last && last.userId === batch.userId && JSON.stringify(last.metadata) === JSON.stringify(batch.metadata)) {
+        last.events = last.events.concat(batch.events);
         return;
       }
-      const events = [...this.eventBuffer];
-      this.eventBuffer = [];
-      const batch = {
-        userId: this.userId,
-        events,
-        metadata: {
-          pageUrl: window.location.href,
-          viewportWidth: screen.width,
-          viewportHeight: screen.height,
-          language: navigator.language
-        }
-      };
-      try {
-        await this.sendBatch(batch);
-      } catch (error) {
-        this.eventBuffer.unshift(...events);
+      this.failedBatches.push(batch);
+    }
+    // The server keeps the replay in its previous session until a batch opens
+    // the visitor's new one with a full snapshot, without which a replay can't
+    // be played. Events recorded before the snapshot go first, to the old one.
+    takeFullSnapshot() {
+      if (!this.isRecording) {
+        return;
       }
+      const wait = this.lastFullSnapshotRequestAt + FULL_SNAPSHOT_REQUEST_INTERVAL_MS - Date.now();
+      if (wait > 0) {
+        if (this.deferredSnapshotTimer === void 0) {
+          this.deferredSnapshotTimer = window.setTimeout(() => {
+            this.deferredSnapshotTimer = void 0;
+            this.takeFullSnapshot();
+          }, wait);
+        }
+        return;
+      }
+      this.lastFullSnapshotRequestAt = Date.now();
+      void this.flushEvents();
+      try {
+        window.rrweb?.record.takeFullSnapshot?.(true);
+      } catch {
+      }
+      void this.flushEvents();
+    }
+    // Unlike stopRecording, drops what's buffered: the server refuses it anyway.
+    stopForSizeCap() {
+      this.capped = true;
+      if (this.stopRecordingFn) {
+        this.stopRecordingFn();
+        this.stopRecordingFn = void 0;
+      }
+      this.isRecording = false;
+      this.clearBatchTimer();
+      this.eventBuffer = [];
+      this.failedBatches = [];
     }
     // Update user ID when it changes
     updateUserId(userId) {
+      if (userId === this.userId) {
+        return;
+      }
+      if (this.eventBuffer.length > 0) {
+        void this.flushEvents();
+      }
       this.userId = userId;
     }
     // Handle page navigation for SPAs
@@ -449,142 +775,23 @@
     }
   };
 
-  // botSignals.ts
-  var CLIENT_BOT_SIGNAL_MASKS = {
-    automationApi: 1 << 0,
-    webdriver: 1 << 0,
-    zeroOuterDimensions: 1 << 1,
-    missingChrome: 1 << 2,
-    swiftShader: 1 << 3,
-    emptyPlugins: 1 << 4,
-    defaultViewport800x600: 1 << 5,
-    defaultViewport1024x768: 1 << 6,
-    impossibleDimensions: 1 << 7,
-    outerDimensionsWeird: 1 << 8,
-    pluginApiAbsence: 1 << 9
-  };
-  var cachedBotSignals = null;
-  var MAX_BOT_SCORE = 10;
-  function getBotScore() {
-    return getBotSignals().score;
-  }
-  function getBotSignalMask() {
-    return getBotSignals().mask;
-  }
-  function getBotSignals() {
-    cachedBotSignals ?? (cachedBotSignals = calculateBotSignals());
-    return cachedBotSignals;
-  }
-  function calculateBotSignals() {
-    let score = 0;
-    let mask = 0;
-    function addSignal(signalMask, weight) {
-      if ((mask & signalMask) !== 0) {
-        return;
-      }
-      mask |= signalMask;
-      score += weight;
-    }
-    try {
-      const userAgent = navigator.userAgent;
-      const isChromeLike = /Chrome\//.test(userAgent) && !/\bwv\b|; wv\)/.test(userAgent);
-      const isDesktopUA = /Windows NT|Macintosh|X11|Linux x86_64/.test(userAgent) && !/Mobile|Android|iPhone|iPad/.test(userAgent);
-      const screenWidth = Number(window.screen?.width);
-      const screenHeight = Number(window.screen?.height);
-      const outerWidth = Number(window.outerWidth);
-      const outerHeight = Number(window.outerHeight);
-      const innerWidth = Number(window.innerWidth);
-      const innerHeight = Number(window.innerHeight);
-      const automationGlobalNames = [
-        "__webdriver_evaluate",
-        "__selenium_evaluate",
-        "__webdriver_script_function",
-        "__webdriver_script_func",
-        "__webdriver_script_fn",
-        "__fxdriver_evaluate",
-        "__driver_unwrapped",
-        "__webdriver_unwrapped",
-        "__driver_evaluate",
-        "__selenium_unwrapped",
-        "__fxdriver_unwrapped",
-        "_phantom",
-        "callPhantom",
-        "__nightmare",
-        "domAutomation",
-        "domAutomationController"
-      ];
-      const hasAutomationGlobal = automationGlobalNames.some((name) => name in window || name in document);
-      if (navigator.webdriver === true || hasAutomationGlobal) {
-        addSignal(CLIENT_BOT_SIGNAL_MASKS.automationApi, 3);
-      }
-      if (outerHeight === 0 || outerWidth === 0) {
-        addSignal(CLIENT_BOT_SIGNAL_MASKS.zeroOuterDimensions, 2);
-      }
-      if (!Number.isFinite(screenWidth) || !Number.isFinite(screenHeight) || screenWidth <= 0 || screenHeight <= 0 || screenWidth > 1e5 || screenHeight > 1e5) {
-        addSignal(CLIENT_BOT_SIGNAL_MASKS.impossibleDimensions, 3);
-      }
-      if (isDesktopUA && screenWidth === 800 && screenHeight === 600) {
-        addSignal(CLIENT_BOT_SIGNAL_MASKS.defaultViewport800x600, 3);
-      }
-      if (isDesktopUA && screenWidth === 1024 && screenHeight === 768) {
-        addSignal(CLIENT_BOT_SIGNAL_MASKS.defaultViewport1024x768, 3);
-      }
-      if (Number.isFinite(outerWidth) && Number.isFinite(outerHeight) && Number.isFinite(innerWidth) && Number.isFinite(innerHeight) && outerWidth > 0 && outerHeight > 0 && innerWidth > 0 && innerHeight > 0 && (outerWidth + 8 < innerWidth || outerHeight + 8 < innerHeight)) {
-        addSignal(CLIENT_BOT_SIGNAL_MASKS.outerDimensionsWeird, 2);
-      }
-      let hasPluginOrApiAbsence = false;
-      if (!window.chrome && isChromeLike) {
-        addSignal(CLIENT_BOT_SIGNAL_MASKS.missingChrome, 1);
-        hasPluginOrApiAbsence = true;
-      }
-      try {
-        const canvas = document.createElement("canvas");
-        const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
-        if (gl) {
-          const rendererParts = [];
-          const rendererRaw = gl.getParameter(gl.RENDERER);
-          if (typeof rendererRaw === "string") {
-            rendererParts.push(rendererRaw);
-          }
-          try {
-            const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
-            if (debugInfo) {
-              const unmaskedRaw = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
-              if (typeof unmaskedRaw === "string") {
-                rendererParts.push(unmaskedRaw);
-              }
-            }
-          } catch {
-          }
-          if (rendererParts.join(" ").toLowerCase().includes("swiftshader")) {
-            addSignal(CLIENT_BOT_SIGNAL_MASKS.swiftShader, 1);
-          }
-        }
-      } catch {
-      }
-      if ((!navigator.plugins || navigator.plugins.length === 0) && isChromeLike) {
-        addSignal(CLIENT_BOT_SIGNAL_MASKS.emptyPlugins, 1);
-        hasPluginOrApiAbsence = true;
-      }
-      if (hasPluginOrApiAbsence) {
-        addSignal(CLIENT_BOT_SIGNAL_MASKS.pluginApiAbsence, 0);
-      }
-    } catch (e2) {
-    }
-    return {
-      score: Math.min(score, MAX_BOT_SCORE),
-      mask
-    };
-  }
-
   // tracking.ts
+  var FEATURE_FLAG_REQUEST_TIMEOUT_MS2 = 2e3;
+  var MAX_REFERRER_LENGTH = 2048;
+  var MAX_PAGE_TITLE_LENGTH = 512;
+  var MAX_PROPERTIES_LENGTH = 2048;
+  var MAX_OUTBOUND_TEXT_LENGTH = 500;
+  var REPLAY_KEEPALIVE_BUDGET_BYTES = 48 * 1024;
+  var RETRYABLE_REPLAY_STATUSES = [408, 429, 502, 503, 504];
   var Tracker = class {
     constructor(config) {
       this.customUserId = null;
       this.errorDedupeCache = /* @__PURE__ */ new Map();
       this.errorDedupeLastCleanup = 0;
       this.exposedFeatureFlags = /* @__PURE__ */ new Set();
+      this.replayKeepaliveBytesInFlight = 0;
       this.config = config;
+      this.lastPageviewUrl = this.getPageviewUrl();
       this.loadUserId();
       if (config.enableSessionReplay) {
         this.initializeSessionReplay();
@@ -600,16 +807,20 @@
         return "";
       }
     }
+    isUnassignedVariant(assignment) {
+      return assignment.flagType === "multivariate" && typeof assignment.value !== "string";
+    }
     getFeatureFlagEventPayload() {
       const payload = {};
       for (const [key, assignment] of Object.entries(this.config.featureFlags || {})) {
+        if (this.isUnassignedVariant(assignment)) continue;
         payload[key] = this.serializeFeatureFlagValue(assignment.value);
       }
       return payload;
     }
     getCurrentUrlContext() {
       const url = new URL(window.location.href);
-      const pathname = url.hash && url.hash.startsWith("#/") ? url.hash.substring(1) : url.pathname;
+      const pathname = getTrackedPathname(url, this.config.trackUrlFragments);
       return {
         hostname: url.hostname,
         pathname,
@@ -622,6 +833,9 @@
       };
     }
     async refreshFeatureFlags() {
+      if (!this.config.featureFlagsEnabled) return;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), FEATURE_FLAG_REQUEST_TIMEOUT_MS2);
       try {
         const response = await fetch(`${this.config.analyticsHost}/site/${this.config.siteId}/feature-flags/evaluate`, {
           method: "POST",
@@ -635,12 +849,18 @@
           }),
           mode: "cors",
           credentials: "omit",
-          keepalive: true
+          keepalive: true,
+          signal: controller.signal
         });
         if (!response.ok) return;
         const data = await response.json();
         this.config.featureFlags = data?.flags && typeof data.flags === "object" ? data.flags : {};
+        if (data?.featureFlagsEnabled === false) {
+          this.config.featureFlagsEnabled = false;
+        }
       } catch (e2) {
+      } finally {
+        window.clearTimeout(timeout);
       }
     }
     loadUserId() {
@@ -664,29 +884,51 @@
         console.error("Failed to initialize session replay:", error);
       }
     }
+    /**
+     * Resolves once the server has dealt with the batch (stored or deliberately
+     * skipped it); rejects when it is worth sending again, which the recorder does.
+     * Every batch that fits what is left of the keepalive budget is sent with
+     * keepalive, so a navigation can't cancel it: a batch already on its way
+     * when the page hides is out of the buffer that pagehide flushes.
+     */
     async sendSessionReplayBatch(batch) {
+      const body = JSON.stringify(batch);
+      const keepaliveRoom = REPLAY_KEEPALIVE_BUDGET_BYTES - this.replayKeepaliveBytesInFlight;
+      const keepaliveBytes = body.length <= keepaliveRoom ? new Blob([body]).size : Infinity;
+      const useKeepalive = keepaliveBytes <= keepaliveRoom;
+      if (useKeepalive) this.replayKeepaliveBytesInFlight += keepaliveBytes;
+      let response;
       try {
-        await fetch(`${this.config.analyticsHost}/session-replay/record/${this.config.siteId}`, {
+        response = await fetch(`${this.config.analyticsHost}/session-replay/record/${this.config.siteId}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
           },
-          body: JSON.stringify(batch),
+          body,
           mode: "cors",
-          keepalive: false
-          // Disable keepalive for large session replay requests
+          keepalive: useKeepalive
         });
       } catch (error) {
         console.error("Failed to send session replay batch:", error);
         throw error;
+      } finally {
+        if (useKeepalive) this.replayKeepaliveBytesInFlight -= keepaliveBytes;
+      }
+      if (!response.ok) {
+        if (RETRYABLE_REPLAY_STATUSES.includes(response.status)) {
+          throw new Error(`Session replay batch failed with status ${response.status}`);
+        }
+        return;
+      }
+      try {
+        return await response.json();
+      } catch {
+        return;
       }
     }
     createBasePayload() {
       const url = new URL(window.location.href);
-      let pathname = url.pathname;
-      if (url.hash && url.hash.startsWith("#/")) {
-        pathname = url.hash.substring(1);
-      }
+      let pathname = getTrackedPathname(url, this.config.trackUrlFragments);
       if (findMatchingPattern(pathname, this.config.skipPatterns)) {
         return null;
       }
@@ -702,8 +944,8 @@
         screenWidth: screen.width,
         screenHeight: screen.height,
         language: navigator.language,
-        page_title: document.title,
-        referrer: document.referrer,
+        page_title: truncateText(document.title, MAX_PAGE_TITLE_LENGTH),
+        referrer: truncateText(document.referrer, MAX_REFERRER_LENGTH),
         _bs: getBotScore(),
         _bsm: getBotSignalMask()
       };
@@ -716,6 +958,9 @@
       const featureFlagPayload = this.getFeatureFlagEventPayload();
       if (Object.keys(featureFlagPayload).length > 0) {
         payload.feature_flags = featureFlagPayload;
+      }
+      if (this.config.featureFlagsEnabled) {
+        payload.visitor_id = this.config.visitorId;
       }
       return payload;
     }
@@ -761,14 +1006,28 @@
       this.sendTrackingData(payload);
     }
     trackPageview() {
+      this.lastPageviewUrl = this.getPageviewUrl();
       this.track("pageview");
+    }
+    trackPageviewIfUrlChanged() {
+      if (this.getPageviewUrl() !== this.lastPageviewUrl) {
+        this.trackPageview();
+      }
+    }
+    getPageviewUrl() {
+      const url = new URL(window.location.href);
+      return JSON.stringify([
+        url.hostname,
+        getTrackedPathname(url, this.config.trackUrlFragments),
+        this.config.trackQuerystring ? url.search : ""
+      ]);
     }
     trackEvent(name, properties = {}) {
       this.track("custom_event", name, properties);
     }
     getFeatureFlag(key, fallback) {
       const assignment = this.config.featureFlags?.[key];
-      if (!assignment) {
+      if (!assignment || this.isUnassignedVariant(assignment)) {
         return fallback;
       }
       const exposureKey = `${key}:${assignment.version}:${this.serializeFeatureFlagValue(assignment.value)}`;
@@ -785,7 +1044,7 @@
     }
     getFeatureFlags() {
       return Object.fromEntries(
-        Object.entries(this.config.featureFlags || {}).map(([key, assignment]) => [key, assignment.value])
+        Object.entries(this.config.featureFlags || {}).filter(([, assignment]) => !this.isUnassignedVariant(assignment)).map(([key, assignment]) => [key, assignment.value])
       );
     }
     getFeatureFlagPayload(key, fallback) {
@@ -801,7 +1060,12 @@
       );
     }
     trackOutbound(url, text = "", target = "_self") {
-      this.track("outbound", "", { url, text, target });
+      const properties = { url, text: truncateText(text, MAX_OUTBOUND_TEXT_LENGTH), target };
+      const overflow = JSON.stringify(properties).length - MAX_PROPERTIES_LENGTH;
+      if (overflow > 0) {
+        properties.url = truncateText(url, Math.max(0, url.length - overflow));
+      }
+      this.track("outbound", "", properties);
     }
     trackWebVitals(vitals) {
       const basePayload = this.createBasePayload();
@@ -955,6 +1219,9 @@
         localStorage.removeItem(`${this.config.namespace}-user-id`);
       } catch (e2) {
       }
+      if (this.sessionReplayRecorder) {
+        this.sessionReplayRecorder.updateUserId("");
+      }
       void this.refreshFeatureFlags();
     }
     getUserId() {
@@ -991,7 +1258,7 @@
     }
   };
 
-  // ../../node_modules/web-vitals/dist/web-vitals.js
+  // ../../../node_modules/.pnpm/web-vitals@5.1.0/node_modules/web-vitals/dist/web-vitals.js
   var e = -1;
   var t = (t2) => {
     addEventListener("pageshow", ((n2) => {
@@ -1228,6 +1495,7 @@
   };
 
   // webVitals.ts
+  var SEND_DELAY_MS = 2e4;
   var WebVitalsCollector = class {
     constructor(onReady) {
       this.data = {
@@ -1244,21 +1512,18 @@
     }
     initialize() {
       try {
-        x(this.collectMetric.bind(this));
-        L(this.collectMetric.bind(this));
-        S(this.collectMetric.bind(this));
+        x(this.collectMetric.bind(this), { reportAllChanges: true });
+        L(this.collectMetric.bind(this), { reportAllChanges: true });
+        S(this.collectMetric.bind(this), { reportAllChanges: true });
         E(this.collectMetric.bind(this));
         $(this.collectMetric.bind(this));
-        this.timeout = setTimeout(() => {
-          if (!this.sent) {
-            this.sendData();
-          }
-        }, 2e4);
-        window.addEventListener("beforeunload", () => {
-          if (!this.sent) {
+        this.timeout = setTimeout(() => this.sendData(), SEND_DELAY_MS);
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "hidden") {
             this.sendData();
           }
         });
+        window.addEventListener("pagehide", () => this.sendData());
       } catch (e2) {
         console.warn("Error initializing web vitals tracking:", e2);
       }
@@ -1267,10 +1532,6 @@
       if (this.sent) return;
       const metricName = metric.name.toLowerCase();
       this.data[metricName] = metric.value;
-      const allCollected = Object.values(this.data).every((value) => value !== null);
-      if (allCollected) {
-        this.sendData();
-      }
     }
     sendData() {
       if (this.sent) return;
@@ -1289,8 +1550,10 @@
   };
 
   // clickTracking.ts
+  var CLICK_THROTTLE_MS = 1e3;
   var ClickTrackingManager = class {
     constructor(tracker, config) {
+      this.lastClickAt = /* @__PURE__ */ new WeakMap();
       this.tracker = tracker;
       this.config = config;
     }
@@ -1324,6 +1587,10 @@
       const buttonElement = this.findButton(element);
       if (!buttonElement) return;
       if (buttonElement.hasAttribute("data-rybbit-event")) return;
+      const now = Date.now();
+      const lastAt = this.lastClickAt.get(buttonElement);
+      if (lastAt !== void 0 && now - lastAt < CLICK_THROTTLE_MS) return;
+      this.lastClickAt.set(buttonElement, now);
       const properties = {
         text: this.getElementText(buttonElement),
         ...this.extractDataAttributes(buttonElement)
@@ -1405,6 +1672,9 @@
   };
 
   // formTracking.ts
+  function getFormProperty(form, key) {
+    return Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, key)?.get?.call(form);
+  }
   var FormTrackingManager = class {
     constructor(tracker, config) {
       this.tracker = tracker;
@@ -1422,13 +1692,13 @@
     }
     handleSubmit(event) {
       const form = event.target;
-      if (form.tagName !== "FORM") return;
+      if (!(form instanceof HTMLFormElement)) return;
       const properties = {
-        formId: form.id || "",
-        formName: form.name || "",
-        formAction: form.action || "",
-        method: (form.method || "get").toUpperCase(),
-        fieldCount: form.elements.length,
+        formId: form.getAttribute("id") || "",
+        formName: form.getAttribute("name") || "",
+        formAction: getFormProperty(form, "action") || "",
+        method: (getFormProperty(form, "method") || "get").toUpperCase(),
+        fieldCount: getFormProperty(form, "elements")?.length ?? 0,
         ariaLabel: form.getAttribute("aria-label") || void 0,
         ...this.extractDataAttributes(form)
       };
@@ -1436,6 +1706,7 @@
     }
     handleChange(event) {
       const target = event.target;
+      if (!(target instanceof Element)) return;
       const tagName = target.tagName.toUpperCase();
       if (!["INPUT", "SELECT", "TEXTAREA"].includes(tagName)) return;
       if (target.disabled) return;
@@ -1449,8 +1720,8 @@
         element: tagName.toLowerCase(),
         inputType: tagName === "INPUT" ? target.type?.toLowerCase() : void 0,
         inputName,
-        formId: target.form?.id || void 0,
-        formName: target.form?.name || void 0,
+        formId: target.form?.getAttribute("id") || void 0,
+        formName: target.form?.getAttribute("name") || void 0,
         ...this.extractDataAttributes(target)
       };
       this.tracker.trackInputChange(properties);
@@ -1468,15 +1739,23 @@
   };
 
   // index.ts
+  function hasOptedOut(optOutKey) {
+    if (window.__RYBBIT_OPTOUT__) return true;
+    try {
+      return localStorage.getItem(optOutKey) !== null;
+    } catch {
+      return false;
+    }
+  }
   (async function() {
-    const scriptTag = document.currentScript;
+    const scriptTag = document.currentScript || document.querySelector('script[src*="/script.js"]');
     if (!scriptTag) {
       console.error("Could not find current script tag");
       return;
     }
     const namespace = scriptTag.getAttribute("data-namespace") || "rybbit";
     const optOutKey = `disable-${namespace}`;
-    if (window.__RYBBIT_OPTOUT__ || localStorage.getItem(optOutKey) !== null) {
+    if (hasOptedOut(optOutKey)) {
       window[namespace] = {
         pageview: () => {
         },
@@ -1570,7 +1849,7 @@
         });
       });
     }
-    const trackPageview = () => tracker.trackPageview();
+    const trackPageview = () => tracker.trackPageviewIfUrlChanged();
     const debouncedTrackPageview = config.debounceDuration > 0 ? debounce(trackPageview, config.debounceDuration) : trackPageview;
     function setupEventListeners() {
       document.addEventListener("click", function(e2) {
@@ -1648,7 +1927,6 @@
     window.addEventListener("beforeunload", () => {
       clickManager?.cleanup();
       copyManager?.cleanup();
-      tracker.cleanup();
     });
     if (config.autoTrackPageview) {
       tracker.trackPageview();

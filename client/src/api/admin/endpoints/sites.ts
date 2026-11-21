@@ -1,3 +1,4 @@
+import type { OrgRole, Permission } from "@rybbit/shared";
 import { authedFetch } from "../../utils";
 
 export type SiteResponse = {
@@ -8,19 +9,30 @@ export type SiteResponse = {
   domain: string;
   createdAt: string;
   updatedAt: string;
-  createdBy: string;
+  createdBy: string | null;
   organizationId: string | null;
+  // Set while the site has no organization (created from the landing-page
+  // domain input). Cleared on claim.
+  claimExpiresAt?: string | null;
   public: boolean;
   embedEnabled?: boolean;
   saltUserIds: boolean;
   blockBots: boolean;
+  firstPartyProxy?: boolean;
   isOwner: boolean;
+  /** The viewer's role on this site; null for public and private-link viewers. */
+  role: OrgRole | null;
+  /** What that role allows here. Read through useSitePermissions, not directly. */
+  permissions: Permission[];
+  // Cloud only: the site collects nothing until its organization starts a trial or plan.
+  requiresPlan?: boolean;
   // Analytics features
   sessionReplay?: boolean;
   webVitals?: boolean;
   trackErrors?: boolean;
   trackOutbound?: boolean;
   trackUrlParams?: boolean;
+  trackUrlFragments?: boolean;
   trackInitialPageView?: boolean;
   trackSpaNavigation?: boolean;
   trackIp?: boolean;
@@ -42,6 +54,9 @@ export type GetSitesFromOrgResponse = {
     monthlyEventCount: number | null;
     overMonthlyLimit: boolean | null;
   } | null;
+  /** The viewer's role in the organization and what it allows. */
+  role: OrgRole | null;
+  permissions: Permission[];
   sites: Array<{
     id: string | null;
     siteId: number;
@@ -57,8 +72,12 @@ export type GetSitesFromOrgResponse = {
     blockBots: boolean;
     sessionsLast24Hours: number;
     isOwner: boolean;
+    role: OrgRole;
+    permissions: Permission[];
     tags?: string[] | null;
     teams?: { id: string; name: string }[];
+    // Cloud only: the site collects nothing until its organization starts a trial or plan.
+    requiresPlan?: boolean;
   }>;
   subscription: {
     monthlyEventCount: number;
@@ -82,8 +101,21 @@ export function addSite(
     isPublic?: boolean;
     saltUserIds?: boolean;
     blockBots?: boolean;
+    sessionReplay?: boolean;
+    webVitals?: boolean;
+    trackErrors?: boolean;
+    trackOutbound?: boolean;
+    trackUrlParams?: boolean;
+    trackUrlFragments?: boolean;
+    trackInitialPageView?: boolean;
+    trackSpaNavigation?: boolean;
+    trackButtonClicks?: boolean;
+    trackCopy?: boolean;
+    trackFormInteractions?: boolean;
   }
 ) {
+  // Undefined values are dropped from the JSON body, so the server falls back
+  // to its column defaults for anything not explicitly chosen.
   return authedFetch<{ siteId: number }>(`/organizations/${organizationId}/sites`, undefined, {
     method: "POST",
     data: {
@@ -93,6 +125,17 @@ export function addSite(
       public: settings?.isPublic || false,
       saltUserIds: settings?.saltUserIds || false,
       blockBots: settings?.blockBots === undefined ? true : settings?.blockBots,
+      sessionReplay: settings?.sessionReplay,
+      webVitals: settings?.webVitals,
+      trackErrors: settings?.trackErrors,
+      trackOutbound: settings?.trackOutbound,
+      trackUrlParams: settings?.trackUrlParams,
+      trackUrlFragments: settings?.trackUrlFragments,
+      trackInitialPageView: settings?.trackInitialPageView,
+      trackSpaNavigation: settings?.trackSpaNavigation,
+      trackButtonClicks: settings?.trackButtonClicks,
+      trackCopy: settings?.trackCopy,
+      trackFormInteractions: settings?.trackFormInteractions,
     },
     headers: {
       "Content-Type": "application/json",
@@ -124,13 +167,20 @@ export function updateSiteConfig(
     embedEnabled?: boolean;
     saltUserIds?: boolean;
     blockBots?: boolean;
+    firstPartyProxy?: boolean;
     excludedIPs?: string[];
     excludedCountries?: string[];
+    excludedPaths?: string[];
+    excludedHostnames?: string[];
+    excludedUserAgents?: string[];
+    excludedASNs?: string[];
+    excludedQueryParams?: string[];
     sessionReplay?: boolean;
     webVitals?: boolean;
     trackErrors?: boolean;
     trackOutbound?: boolean;
     trackUrlParams?: boolean;
+    trackUrlFragments?: boolean;
     trackInitialPageView?: boolean;
     trackSpaNavigation?: boolean;
     trackIp?: boolean;
@@ -153,6 +203,23 @@ export function fetchSite(siteId: string | number) {
   return authedFetch<SiteResponse>(`/sites/${siteId}`);
 }
 
+export type SiteUsageResponse = {
+  periodStart: string;
+  daysInMonth: number;
+  daysElapsed: number;
+  siteEventsThisMonth: number;
+  orgEventsThisMonth: number;
+  /** null when self-hosted (no enforced limit) */
+  orgEventLimit: number | null;
+  /** Month-end projections from usage so far; null in the first day of the month */
+  projectedSiteEvents: number | null;
+  projectedOrgEvents: number | null;
+};
+
+export function fetchSiteUsage(siteId: number) {
+  return authedFetch<SiteUsageResponse>(`/sites/${siteId}/usage`);
+}
+
 export function fetchSiteHasData(siteId: string) {
   return authedFetch<{ hasData: boolean }>(`/sites/${siteId}/has-data`);
 }
@@ -161,13 +228,30 @@ export function fetchSiteIsPublic(siteId: string | number) {
   return authedFetch<{ isPublic: boolean }>(`/sites/${siteId}/is-public`);
 }
 
-export interface VerifyScriptResponse {
-  scriptTagFound: boolean;
-  scriptExecuted: boolean;
-  siteIdMatch: boolean;
-  issues: string[];
+export type UnclaimedSiteResponse = {
+  id: string | null;
+  siteId: number;
+  domain: string;
+  privateLinkKey: string;
+  claimExpiresAt: string;
+};
+
+/** Creates an owner-less site for a domain. No session required. */
+export function createUnclaimedSite(domain: string) {
+  return authedFetch<UnclaimedSiteResponse>("/sites/unclaimed", undefined, {
+    method: "POST",
+    data: { domain },
+  });
 }
 
-export function verifyScript(siteId: number | string) {
-  return authedFetch<VerifyScriptResponse>(`/sites/${siteId}/verify-script`);
+/** Moves an unclaimed site into the caller's organization. Requires a session. */
+export function claimSite(siteId: number | string, privateLinkKey: string, organizationId: string) {
+  return authedFetch<{ id: string | null; siteId: number; domain: string; organizationId: string }>(
+    `/sites/${siteId}/claim`,
+    undefined,
+    {
+      method: "POST",
+      data: { privateLinkKey, organizationId },
+    }
+  );
 }

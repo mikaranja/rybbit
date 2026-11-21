@@ -6,6 +6,7 @@ import type {
   FeatureFlagType,
   FeatureFlagVariant,
 } from "./featureFlags";
+import type { GoalConfig, GoalType } from "./goals";
 import { CommonApiParams, toQueryParams } from "./types";
 
 export type ExperimentStatus = "draft" | "running" | "paused" | "completed";
@@ -31,17 +32,8 @@ export type ExperimentGoal = {
   goalId: number;
   siteId: number;
   name: string | null;
-  goalType: "path" | "event";
-  config: {
-    pathPattern?: string;
-    eventName?: string;
-    eventPropertyKey?: string;
-    eventPropertyValue?: string | number | boolean;
-    propertyFilters?: Array<{
-      key: string;
-      value: string | number | boolean;
-    }>;
-  };
+  goalType: GoalType;
+  config: GoalConfig;
   createdAt: string;
 };
 
@@ -77,6 +69,7 @@ export type ExperimentUpdatePayload = Partial<ExperimentPayload>;
 
 export type ExperimentVariantResult = {
   variant: string;
+  units: number;
   sessions: number;
   exposures: number;
   conversions: number;
@@ -88,10 +81,24 @@ export type ExperimentVariantResult = {
 export type ExperimentResults = {
   experiment: Experiment;
   variants: ExperimentVariantResult[];
+  totalUnits: number;
   totalExposureSessions: number;
   totalConversions: number;
   hasGoal: boolean;
   measurement: "exposure" | "assignment";
+  window: ExperimentWindow;
+};
+
+export type ExperimentWindowMode = "experiment" | "range";
+
+export type ExperimentWindow = { mode: ExperimentWindowMode; start: string | null; end: string | null };
+
+export type ExperimentTimeseriesPoint = { date: string; units: number; conversions: number; conversionRate: number };
+
+export type ExperimentTimeseries = {
+  variants: { variant: string; points: ExperimentTimeseriesPoint[] }[];
+  measurement: "exposure" | "assignment";
+  window: ExperimentWindow;
 };
 
 export async function fetchExperiments(site: string | number): Promise<Experiment[]> {
@@ -124,16 +131,4 @@ export async function deleteExperiment(site: string | number, experimentId: numb
   return authedFetch(`/sites/${site}/experiments/${experimentId}`, undefined, {
     method: "DELETE",
   });
-}
-
-export async function fetchExperimentResults(
-  site: string | number,
-  experimentId: number,
-  params: CommonApiParams
-): Promise<ExperimentResults> {
-  const response = await authedFetch<{ data: ExperimentResults }>(
-    `/sites/${site}/experiments/${experimentId}/results`,
-    toQueryParams(params)
-  );
-  return response.data;
 }

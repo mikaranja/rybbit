@@ -1,8 +1,10 @@
+import { roleHasPermission } from "@rybbit/shared";
 import { FastifyReply, FastifyRequest } from "fastify";
 import { stripe } from "../../lib/stripe.js";
 import { db } from "../../db/postgres/postgres.js";
-import { organization, member } from "../../db/postgres/schema.js";
-import { eq, and } from "drizzle-orm";
+import { organization } from "../../db/postgres/schema.js";
+import { eq } from "drizzle-orm";
+import { getOrgMembership } from "../../lib/access.js";
 import Stripe from "stripe";
 
 interface PortalRequestBody {
@@ -27,15 +29,9 @@ export async function createPortalSession(request: FastifyRequest<{ Body: Portal
 
   try {
     // 1. Verify user has permission to manage billing for this organization
-    const memberResult = await db
-      .select({
-        role: member.role,
-      })
-      .from(member)
-      .where(and(eq(member.userId, userId), eq(member.organizationId, organizationId)))
-      .limit(1);
+    const membership = await getOrgMembership(userId, organizationId);
 
-    if (!memberResult.length || memberResult[0].role !== "owner") {
+    if (!roleHasPermission(membership?.role, "billing:manage")) {
       return reply.status(403).send({
         error: "Only organization owners can manage billing",
       });
@@ -129,8 +125,11 @@ export async function createPortalSession(request: FastifyRequest<{ Body: Portal
           };
         }
       } else if (flowType === "payment_method_update") {
+        // Send the customer back once the card is saved, so the app can charge it right away
+        // (see retryPayment) instead of leaving them on the portal's home page.
         sessionConfig.flow_data = {
           type: "payment_method_update",
+          after_completion: { type: "redirect", redirect: { return_url: returnUrl } },
         };
       }
     }
@@ -140,7 +139,7 @@ export async function createPortalSession(request: FastifyRequest<{ Body: Portal
     // 4. Return the Billing Portal Session URL
     return reply.send({ portalUrl: portalSession.url });
   } catch (error: any) {
-    console.error("Stripe Portal Session Error:", error);
+    request.log.error({ err: error }, "Stripe Portal Session Error");
     return reply.status(500).send({
       error: "Failed to create Stripe portal session",
       details: error.message,

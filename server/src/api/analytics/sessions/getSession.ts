@@ -1,6 +1,7 @@
 import { FastifyReply, FastifyRequest } from "fastify";
-import { clickhouse } from "../../../db/clickhouse/clickhouse.js";
-import { processResults } from "../utils/utils.js";
+import { SESSION_CHANNEL_AGG, SESSION_REFERRER_AGG } from "../utils/sessionAttribution.js";
+import { analyticsRoute, runAnalyticsQuery } from "../utils/analyticsQuery.js";
+import { getSessionGoalMatcher, resolveSessionGoals, SessionGoal } from "./sessionGoals.js";
 
 export interface SessionDetails {
   session_id: string;
@@ -38,6 +39,8 @@ export interface Event {
   type: string;
   event_name?: string;
   properties?: string;
+  // Goals this event completed. Empty for most events.
+  goals: SessionGoal[];
 }
 
 export interface SessionPageviewsAndEvents {
@@ -63,11 +66,11 @@ export interface GetSessionRequest {
   };
 }
 
-export async function getSession(req: FastifyRequest<GetSessionRequest>, res: FastifyReply) {
-  const { sessionId, siteId } = req.params;
-  const limit = req.query.limit ? parseInt(req.query.limit) : 100;
-  const offset = req.query.offset ? parseInt(req.query.offset) : 0;
-  const minutes = req.query.minutes ? parseInt(req.query.minutes) : undefined;
+// Array(UInt32) of the goal ids an event completes; see buildSessionGoalMatcher.
+const NO_GOALS_EXPRESSION = "emptyArrayUInt32()";
+
+export const buildSessionQueries = (query: GetSessionRequest["Querystring"], goalExpression = NO_GOALS_EXPRESSION) => {
+  const minutes = query.minutes ? parseInt(query.minutes) : undefined;
 
   // Add time filter if minutes is provided
   const timeFilter = minutes ? `timestamp > now() - interval ${minutes} minute` : "";
@@ -75,9 +78,8 @@ export async function getSession(req: FastifyRequest<GetSessionRequest>, res: Fa
   // Add the WHERE clause connector if timeFilter exists
   const timeFilterWithConnector = timeFilter ? `AND ${timeFilter}` : "";
 
-  try {
-    // 1. First query: Get session data derived from events
-    const sessionQuery = `
+  // 1. First query: Get session data derived from events
+  const sessionQuery = `
 SELECT
     session_id,
     any(user_id) as user_id,
@@ -92,18 +94,18 @@ SELECT
     any(operating_system_version) as operating_system_version,
     any(screen_width) as screen_width,
     any(screen_height) as screen_height,
-    argMin(referrer, timestamp) as referrer,
-    argMin(channel, timestamp) as channel,
+    ${SESSION_REFERRER_AGG} as referrer,
+    ${SESSION_CHANNEL_AGG} as channel,
     min(timestamp) as session_start,
     max(timestamp) as session_end,
     dateDiff('second', min(timestamp), max(timestamp)) as session_duration,
     countIf(type = 'pageview') as pageviews,
     count() as events,
-    argMinIf(pathname, timestamp, type = 'pageview') as entry_page,
-    argMaxIf(pathname, timestamp, type = 'pageview') as exit_page,
+    argMinIf(pathname, timestamp_ms, type = 'pageview') as entry_page,
+    argMaxIf(pathname, timestamp_ms, type = 'pageview') as exit_page,
     any(ip) AS ip
 FROM events
-WHERE 
+WHERE
     site_id = {siteId:Int32}
     AND session_id = {sessionId:String}
     ${timeFilterWithConnector}
@@ -111,8 +113,8 @@ GROUP BY session_id
 LIMIT 1
     `;
 
-    // 2. Query to get total count of pageviews
-    const countQuery = `
+  // 2. Query to get total count of pageviews
+  const countQuery = `
 SELECT
     COUNT(*) as total
 FROM events
@@ -123,10 +125,10 @@ WHERE
     ${timeFilterWithConnector}
     `;
 
-    // 3. Query to get paginated pageviews
-    const eventsQuery = `
+  // 3. Query to get paginated pageviews
+  const eventsQuery = `
 SELECT
-    timestamp,
+    timestamp_ms AS timestamp,
     pathname,
     hostname,
     querystring,
@@ -134,40 +136,53 @@ SELECT
     referrer,
     type,
     event_name,
-    props
+    props,
+    ${goalExpression} AS goal_ids
 FROM events
 WHERE
     site_id = {siteId:Int32}
     AND session_id = {sessionId:String}
     AND type != 'performance'
     ${timeFilterWithConnector}
-ORDER BY timestamp ASC
+ORDER BY timestamp_ms ASC
 LIMIT {limit:Int32}
 OFFSET {offset:Int32}
     `;
 
+  return { sessionQuery, countQuery, eventsQuery };
+};
+
+export const getSession = analyticsRoute<GetSessionRequest>(
+  "session data",
+  async (req: FastifyRequest<GetSessionRequest>, res: FastifyReply) => {
+    const { sessionId, siteId } = req.params;
+    const limit = req.query.limit ? parseInt(req.query.limit) : 100;
+    const offset = req.query.offset ? parseInt(req.query.offset) : 0;
+
+    // The same conditions the Goals page counts with, so an event marked here
+    // is one that page counted as a conversion.
+    const matcher = await getSessionGoalMatcher(Number(siteId), req);
+    const { sessionQuery, countQuery, eventsQuery } = buildSessionQueries(req.query, matcher.expression);
+
     // Execute queries in parallel
-    const [sessionResultSettled, countResultSettled, eventsResultSettled] = await Promise.allSettled([
-      clickhouse.query({
+    const [sessionData, countData, eventsData] = await Promise.all([
+      runAnalyticsQuery<SessionDetails>({
         query: sessionQuery,
-        format: "JSONEachRow",
-        query_params: {
+        params: {
           siteId: Number(siteId),
           sessionId,
         },
       }),
-      clickhouse.query({
+      runAnalyticsQuery<{ total: number }>({
         query: countQuery,
-        format: "JSONEachRow",
-        query_params: {
+        params: {
           siteId: Number(siteId),
           sessionId,
         },
       }),
-      clickhouse.query({
+      runAnalyticsQuery<Omit<Event, "goals"> & { goal_ids: number[] }>({
         query: eventsQuery,
-        format: "JSONEachRow",
-        query_params: {
+        params: {
           siteId: Number(siteId),
           sessionId,
           limit,
@@ -176,25 +191,6 @@ OFFSET {offset:Int32}
       }),
     ]);
 
-    // Check if queries were successful
-    if (sessionResultSettled.status === "rejected") {
-      throw sessionResultSettled.reason;
-    }
-    if (countResultSettled.status === "rejected") {
-      throw countResultSettled.reason;
-    }
-    if (eventsResultSettled.status === "rejected") {
-      throw eventsResultSettled.reason;
-    }
-
-    const sessionResult = sessionResultSettled.value;
-    const countResult = countResultSettled.value;
-    const eventsResult = eventsResultSettled.value;
-
-    const sessionData = await processResults<SessionDetails>(sessionResult);
-    const countData = await processResults<{ total: number }>(countResult);
-    const eventsData = await processResults<Event>(eventsResult);
-
     if (!sessionData || sessionData.length === 0) {
       return res.status(404).send({ error: "Session not found" });
     }
@@ -202,7 +198,10 @@ OFFSET {offset:Int32}
     // Combine results
     const response: SessionPageviewsAndEvents = {
       session: sessionData[0],
-      events: eventsData,
+      events: eventsData.map(({ goal_ids, ...event }) => ({
+        ...event,
+        goals: resolveSessionGoals(matcher, [], goal_ids ?? []),
+      })),
       pagination: {
         total: countData[0].total,
         limit,
@@ -212,8 +211,5 @@ OFFSET {offset:Int32}
     };
 
     return res.send({ data: response });
-  } catch (error) {
-    console.error("Error fetching session data:", error);
-    return res.status(500).send({ error: "Failed to fetch session data" });
   }
-}
+);

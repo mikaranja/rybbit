@@ -70,7 +70,7 @@ const structuredData = {
           name: "How do I track title performance?",
           acceptedAnswer: {
             "@type": "Answer",
-            text: "Use analytics to track CTR from search results. Tools like Rybbit can show you which pages get the most organic traffic, helping you identify successful titles and opportunities for improvement.",
+            text: "Use analytics to track CTR from search results. Tools like Rybbit can show you which pages get the most organic traffic and which titles are working.",
           },
         },
         {
@@ -122,8 +122,7 @@ const educationalContent = (
         content.
       </li>
       <li>
-        <strong>Match search intent:</strong> Align your title with what users are actually searching for and expecting
-        to find.
+        <strong>Match search intent:</strong> Align your title with what users are searching for and expecting to find.
       </li>
       <li>
         <strong>Include modifiers:</strong> Words like "best," "guide," "2024," or "free" can help you rank for
@@ -200,8 +199,7 @@ const faqs = [
         <Link href="https://app.rybbit.io" className="text-emerald-600 dark:text-emerald-400 hover:underline">
           Rybbit
         </Link>{" "}
-        can show you which pages get the most organic traffic, helping you identify successful titles and opportunities
-        for improvement.
+        can show you which pages get the most organic traffic and which titles are working.
       </>
     ),
   },
@@ -229,7 +227,7 @@ export default function SEOTitleGeneratorPage() {
       faqs={faqs}
       relatedToolsCategory="seo"
       ctaTitle="Track your SEO performance with Rybbit"
-      ctaDescription="Monitor organic traffic, CTR, and page performance in real-time."
+      ctaDescription="Monitor organic traffic, CTR, and page performance in real time."
       ctaEventLocation="seo_title_generator_cta"
       structuredData={structuredData}
     />

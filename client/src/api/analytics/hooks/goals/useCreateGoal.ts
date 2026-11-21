@@ -1,16 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { createGoal } from "../../endpoints";
+import { createGoal, GoalConfig, GoalType } from "../../endpoints";
+import { invalidateGoalDependents } from "./invalidateGoalDependents";
 
 export interface CreateGoalRequest {
   siteId: number;
   name?: string;
-  goalType: "path" | "event";
-  config: {
-    pathPattern?: string;
-    eventName?: string;
-    eventPropertyKey?: string;
-    eventPropertyValue?: string | number | boolean;
-  };
+  goalType: GoalType;
+  config: GoalConfig;
 }
 
 interface CreateGoalResponse {
@@ -35,8 +31,12 @@ export function useCreateGoal() {
         queryKey: ["goals", variables.siteId.toString()],
       });
       queryClient.invalidateQueries({
+        queryKey: ["goals-summary", variables.siteId.toString()],
+      });
+      queryClient.invalidateQueries({
         queryKey: ["goal-time-series", variables.siteId.toString()],
       });
+      invalidateGoalDependents(queryClient);
     },
   });
 }

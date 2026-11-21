@@ -1,84 +1,89 @@
 "use client";
 
+import { DEFAULT_COMPARISON } from "@/components/DateSelector/types";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useQueryStates } from "nuqs";
+import { createLoader, useQueryStates } from "nuqs";
 import React, { useEffect } from "react";
-import { Time } from "../components/DateSelector/types";
-import { getDashboardTimeForRange, getStoredDashboardDefaultTime } from "./defaultTimeRange";
+import { getStoredDashboardDefaultTime } from "./defaultTimeRange";
 import { analyticsParsers } from "./parsers";
-import { getSiteRouteContext, isSyncedAnalyticsRoute } from "./siteRoute";
+import { getSiteRouteContext, isCarryOverAnalyticsRoute, isSyncedAnalyticsRoute } from "./siteRoute";
 import { getTimezone, useStore } from "./store";
+import { comparisonToUrlParams, timeToUrlParams, urlParamsToComparison, urlParamsToTime } from "./time";
+
+// The parameters that carry dashboard state; embed flags and foreign params don't.
+const STATE_PARAMS = ["timeMode", "wellKnown", "compare", "bucket", "stat", "filters", "segment"] as const;
+
+const loadAnalyticsParams = createLoader(analyticsParsers);
 
 // Hook to sync store state with URL
 export const useSyncStateWithUrl = () => {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { time, bucket, selectedStat, filters, setTime, setBucket, setSelectedStat, setFilters, site } = useStore();
+  const {
+    time,
+    bucket,
+    selectedStat,
+    filters,
+    segmentId,
+    comparison,
+    setTime,
+    setBucket,
+    setSelectedStat,
+    setFilters,
+    setSegmentId,
+    setComparison,
+    site,
+  } = useStore();
 
   const routeContext = React.useMemo(() => getSiteRouteContext(pathname), [pathname]);
-  const shouldSyncUrl = isSyncedAnalyticsRoute(routeContext.route);
+  const isHomepage = pathname === "/";
+  const shouldSyncUrl = isHomepage || isSyncedAnalyticsRoute(routeContext.route);
+  const isRouteReady = isHomepage || site === routeContext.siteId;
+  const search = searchParams.toString();
   const hydrationKey = shouldSyncUrl
-    ? `${routeContext.siteId ?? ""}:${routeContext.privateKey ?? ""}:${routeContext.route ?? ""}?${searchParams.toString()}`
+    ? `${routeContext.siteId ?? ""}:${routeContext.privateKey ?? ""}:${routeContext.route ?? ""}?${search}`
     : null;
   const [hydratedUrlKey, setHydratedUrlKey] = React.useState<string | null>(null);
+  // The page the store was last hydrated on, while it stays synced.
+  const hydratedPathname = React.useRef<string | null>(null);
 
   useEffect(() => {
     if (!hydrationKey && hydratedUrlKey) {
+      hydratedPathname.current = null;
       setHydratedUrlKey(null);
     }
   }, [hydrationKey, hydratedUrlKey]);
 
   // Get URL params using nuqs
-  const [urlParams, setUrlParams] = useQueryStates(analyticsParsers, {
+  const [queryState, setUrlParams] = useQueryStates(analyticsParsers, {
     history: "replace",
     shallow: true,
   });
 
-  // Initialize from URL params after site is set
+  // Site dashboards wait for their context; the homepage has no selected Site.
   useEffect(() => {
-    if (!hydrationKey || site !== routeContext.siteId || hydratedUrlKey === hydrationKey) return;
+    if (!hydrationKey || !isRouteReady || hydratedUrlKey === hydrationKey) return;
+
+    // Arriving on a page, the address is read as it is now: nuqs's values catch up with a
+    // client-side navigation a commit later, and restoring the previous page's would put its
+    // period and filters here and then write them over this address. Staying on the page,
+    // nuqs's values are the current ones: they include writes the address has yet to show.
+    const urlParams = hydratedPathname.current === pathname ? queryState : loadAnalyticsParams(search);
+    hydratedPathname.current = pathname;
+
+    // Arriving without a query keeps what the previous page had; the write
+    // below then puts it in the address so a refresh restores it.
+    if (isCarryOverAnalyticsRoute(routeContext.route) && STATE_PARAMS.every(key => urlParams[key] === null)) {
+      setHydratedUrlKey(hydrationKey);
+      return;
+    }
+
+    // The comparison is restored before the period so the window it resolves
+    // to is the shared link's, not the default period's.
+    setComparison(urlParamsToComparison(urlParams) ?? DEFAULT_COMPARISON);
 
     // Deserialize time from URL
-    let timeFromUrl: Time | null = null;
-
-    // Try to resolve wellKnown preset first
-    if (urlParams.wellKnown) {
-      timeFromUrl = getDashboardTimeForRange(urlParams.wellKnown, getTimezone());
-    } else if (urlParams.timeMode) {
-      // Fallback to explicit date parameters
-      if (urlParams.timeMode === "day" && urlParams.day) {
-        timeFromUrl = { mode: "day", day: urlParams.day };
-      } else if (urlParams.timeMode === "range" && urlParams.startDate && urlParams.endDate) {
-        timeFromUrl =
-          urlParams.startTime && urlParams.endTime
-            ? {
-                mode: "range",
-                startDate: urlParams.startDate,
-                endDate: urlParams.endDate,
-                startTime: urlParams.startTime,
-                endTime: urlParams.endTime,
-              }
-            : { mode: "range", startDate: urlParams.startDate, endDate: urlParams.endDate };
-      } else if (urlParams.timeMode === "week" && urlParams.week) {
-        timeFromUrl = { mode: "week", week: urlParams.week };
-      } else if (urlParams.timeMode === "month" && urlParams.month) {
-        timeFromUrl = { mode: "month", month: urlParams.month };
-      } else if (urlParams.timeMode === "year" && urlParams.year) {
-        timeFromUrl = { mode: "year", year: urlParams.year };
-      } else if (
-        urlParams.timeMode === "past-minutes" &&
-        urlParams.past_minutes_start !== null &&
-        urlParams.past_minutes_end !== null
-      ) {
-        timeFromUrl = {
-          mode: "past-minutes",
-          pastMinutesStart: urlParams.past_minutes_start,
-          pastMinutesEnd: urlParams.past_minutes_end,
-        };
-      } else if (urlParams.timeMode === "all-time") {
-        timeFromUrl = { mode: "all-time" };
-      }
-    }
+    const timeFromUrl = urlParamsToTime(urlParams, getTimezone());
 
     if (timeFromUrl) {
       setTime(timeFromUrl, !urlParams.bucket);
@@ -91,90 +96,63 @@ export const useSyncStateWithUrl = () => {
       setBucket(urlParams.bucket);
     }
 
-    if (urlParams.stat) {
-      setSelectedStat(urlParams.stat);
-    } else {
-      setSelectedStat("users");
-    }
+    if (!isHomepage) {
+      setSelectedStat(urlParams.stat ?? "users");
 
-    setFilters(urlParams.filters ?? []);
+      setFilters(urlParams.filters ?? []);
+      setSegmentId(urlParams.segment ?? null);
+    }
 
     setHydratedUrlKey(hydrationKey);
   }, [
     hydrationKey,
     hydratedUrlKey,
-    routeContext.siteId,
-    site,
+    isHomepage,
+    isRouteReady,
+    pathname,
+    routeContext.route,
+    search,
     setTime,
     setBucket,
     setSelectedStat,
     setFilters,
-    urlParams,
+    setSegmentId,
+    setComparison,
+    queryState,
   ]);
 
   // Update URL when state changes
   useEffect(() => {
-    if (!hydrationKey || hydratedUrlKey !== hydrationKey || site !== routeContext.siteId) return;
+    if (!hydrationKey || hydratedUrlKey !== hydrationKey || !isRouteReady) return;
 
     // Build params object to update - values, not parsers
     const newParams: Record<string, any> = {
-      timeMode: time.mode,
+      ...timeToUrlParams(time),
+      ...comparisonToUrlParams(comparison),
+      // startDateTime/endDateTime are legacy params no mode writes anymore.
+      startDateTime: null,
+      endDateTime: null,
       bucket,
-      stat: selectedStat,
-      filters: filters.length > 0 ? filters : null,
+      ...(!isHomepage && {
+        stat: selectedStat,
+        filters: filters.length > 0 ? filters : null,
+        segment: segmentId,
+      }),
     };
-
-    // If wellKnown preset, only store that
-    if (time.wellKnown) {
-      newParams.wellKnown = time.wellKnown;
-      // Clear explicit date fields
-      newParams.day = null;
-      newParams.startDate = null;
-      newParams.endDate = null;
-      newParams.startTime = null;
-      newParams.endTime = null;
-      newParams.startDateTime = null;
-      newParams.endDateTime = null;
-      newParams.week = null;
-      newParams.month = null;
-      newParams.year = null;
-      newParams.past_minutes_start = null;
-      newParams.past_minutes_end = null;
-    } else {
-      newParams.wellKnown = null;
-      newParams.day = null;
-      newParams.startDate = null;
-      newParams.endDate = null;
-      newParams.startTime = null;
-      newParams.endTime = null;
-      newParams.startDateTime = null;
-      newParams.endDateTime = null;
-      newParams.week = null;
-      newParams.month = null;
-      newParams.year = null;
-      newParams.past_minutes_start = null;
-      newParams.past_minutes_end = null;
-      // Store explicit date fields based on mode
-      if (time.mode === "day" && "day" in time) {
-        newParams.day = time.day;
-      } else if (time.mode === "range" && "startDate" in time && "endDate" in time) {
-        newParams.startDate = time.startDate;
-        newParams.endDate = time.endDate;
-        newParams.startTime = time.startTime ?? null;
-        newParams.endTime = time.endTime ?? null;
-      } else if (time.mode === "week" && "week" in time) {
-        newParams.week = time.week;
-      } else if (time.mode === "month" && "month" in time) {
-        newParams.month = time.month;
-      } else if (time.mode === "year" && "year" in time) {
-        newParams.year = time.year;
-      } else if (time.mode === "past-minutes" && "pastMinutesStart" in time && "pastMinutesEnd" in time) {
-        newParams.past_minutes_start = time.pastMinutesStart;
-        newParams.past_minutes_end = time.pastMinutesEnd;
-      }
-    }
 
     // Note: embed params are automatically preserved by nuqs
     setUrlParams(newParams);
-  }, [time, bucket, selectedStat, filters, site, setUrlParams, hydrationKey, hydratedUrlKey, routeContext.siteId]);
+  }, [
+    time,
+    bucket,
+    selectedStat,
+    filters,
+    segmentId,
+    comparison,
+    isHomepage,
+    isRouteReady,
+    setUrlParams,
+    hydrationKey,
+    hydratedUrlKey,
+  ]);
 };

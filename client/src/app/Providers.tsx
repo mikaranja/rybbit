@@ -1,19 +1,42 @@
 "use client";
 
+// Side-effect import: teaches authedFetch where to find the private key so the
+// HTTP layer itself doesn't have to know about routing or the store.
+import "@/api/installRequestContext";
 import { useAppEnv } from "@/hooks/useIsProduction";
 import { useStopImpersonation } from "@/hooks/useStopImpersonation";
 import { IS_CLOUD } from "@/lib/const";
+import { getStoredDashboardDefaultTime } from "@/lib/defaultTimeRange";
+import { getTimezone, useStore } from "@/lib/store";
 import QueryProvider from "@/providers/QueryProvider";
+import { MotionConfig } from "framer-motion";
 import { ThemeProvider } from "next-themes";
 import Script from "next/script";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
+import { useEffect } from "react";
 import { AuthenticationGuard } from "../components/AuthenticationGuard";
+import { CommandPalette } from "../components/command-palette/CommandPalette";
 import { OrganizationInitializer } from "../components/OrganizationInitializer";
 import { Toaster } from "../components/ui/sonner";
 import { VersionCheck } from "../components/VersionCheck";
 import { TooltipProvider } from "../components/ui/tooltip";
 
 type EmbedTheme = "light" | "dark" | "system";
+
+function DashboardTimeInitializer() {
+  const setTime = useStore(state => state.setTime);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const hasTimeInUrl = params.has("timeMode") || params.has("wellKnown");
+
+    if (!hasTimeInUrl) {
+      setTime(getStoredDashboardDefaultTime(getTimezone()), !params.has("bucket"));
+    }
+  }, [setTime]);
+
+  return null;
+}
 
 function getEmbedTheme(): EmbedTheme | null {
   if (typeof window === "undefined") return null;
@@ -37,24 +60,30 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <NuqsAdapter>
-      <ThemeProvider
-        key={themeStorageKey}
-        attribute="class"
-        enableSystem={true}
-        defaultTheme={embedTheme ?? "system"}
-        storageKey={themeStorageKey}
-        disableTransitionOnChange
-      >
-        <TooltipProvider>
-          <QueryProvider>
-            <OrganizationInitializer />
-            <AuthenticationGuard />
-            {children}
-            <VersionCheck />
-          </QueryProvider>
-          <Toaster />
-        </TooltipProvider>
-      </ThemeProvider>
+      {/* Honors the OS "reduce motion" setting for every framer animation in the app. */}
+      <MotionConfig reducedMotion="user">
+        <ThemeProvider
+          key={themeStorageKey}
+          attribute="class"
+          enableSystem={true}
+          defaultTheme={embedTheme ?? "system"}
+          storageKey={themeStorageKey}
+          disableTransitionOnChange
+        >
+          <TooltipProvider>
+            <QueryProvider>
+              <DashboardTimeInitializer />
+              <OrganizationInitializer />
+              <AuthenticationGuard />
+              {children}
+              {/* ⌘K palette and "?" shortcut sheet; renders nothing for signed-out visitors. */}
+              <CommandPalette />
+              <VersionCheck />
+            </QueryProvider>
+            <Toaster />
+          </TooltipProvider>
+        </ThemeProvider>
+      </MotionConfig>
       {appEnv === "prod" && (
         <Script src="https://demo.rybbit.com/api/script.js" data-site-id="21" strategy="afterInteractive" />
       )}

@@ -1,17 +1,35 @@
 import SqlString from "sqlstring";
+import { ZodError } from "zod";
 import { filterParamSchema, validateFilters } from "./query-validation.js";
+import { SESSION_CHANNEL_AGG } from "./sessionAttribution.js";
 import { FilterParameter, FilterType } from "../types.js";
+import { doesNotMatchUser, matchesUser } from "./effectiveUserId.js";
 
 // Options for customizing filter behavior
 export interface FilterStatementOptions {
   // Parameters that should use session-level subqueries (finds sessions containing matching events)
   // Default: ["event_name", "channel"] - entry_page and exit_page are always session-level due to special aggregation
-  // Channel is handled as a session acquisition field using the first non-empty channel in the session.
+  // Channel is handled as a session acquisition field using the session's first attributed channel
+  // (SESSION_CHANNEL_AGG), matching how session views derive their channel.
   sessionLevelParams?: FilterParameter[];
 
   // Field name mappings for CTEs that extract fields to different column names
   // e.g., { "url_parameters['utm_source']": "utm_source" }
+  // Keys must exactly match the emitted column expression (the getSqlParam
+  // output); the mapping is applied where column identifiers are produced, so
+  // user-supplied filter values are never rewritten.
   fieldMappings?: Record<string, string>;
+
+  // When set, filters on parameters outside this list are silently dropped.
+  // Used by surfaces (e.g. bot_events) whose table carries only a subset of
+  // the filterable columns.
+  parameterAllowlist?: ReadonlySet<FilterParameter>;
+
+  // user_id filters normally match user_id OR identified_user_id, because URLs
+  // may carry either the device fingerprint or the custom identified ID.
+  // Surfaces whose table has no identified_user_id column (bot_events) set
+  // this to false to treat user_id as a plain column. Default: true.
+  dualUserIdColumns?: boolean;
 }
 
 const DEFAULT_SESSION_LEVEL_PARAMS: FilterParameter[] = ["event_name", "channel"];
@@ -44,12 +62,90 @@ const filterTypeToOperator = (type: FilterType) => {
   }
 };
 
-const wrapLikeValue = (type: FilterType, value: string | number): string => {
+// Escape LIKE pattern metacharacters in user-supplied values so they match
+// literally. Only the % wildcards that wrapLikeValue itself adds around the
+// value remain functional.
+const escapeLikePattern = (value: string): string => value.replace(/[\\%_]/g, "\\$&");
+
+export const MAX_REGEX_PATTERN_LENGTH = 500;
+
+// RE2 (what ClickHouse's match() runs) has no lookaround or backreferences;
+// JavaScript accepts them, so a JS-only check would let a pattern through
+// that fails at query time.
+const RE2_UNSUPPORTED = /\(\?<?[=!]|\\[1-9]/;
+
+/**
+ * Why a regex filter pattern cannot run, or null when it can. Shared by the
+ * query path and by stored segments so a saved pattern is held to exactly the
+ * constraints it will be executed under.
+ */
+export function validateRegexPattern(pattern: string): string | null {
+  if (!pattern) {
+    return "Regex pattern cannot be empty";
+  }
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
+    return `Regex pattern too long (max ${MAX_REGEX_PATTERN_LENGTH} characters)`;
+  }
+  try {
+    new RegExp(pattern);
+  } catch (e) {
+    return `Invalid regex pattern: ${e instanceof Error ? e.message : "Unknown error"}`;
+  }
+  if (RE2_UNSUPPORTED.test(pattern)) {
+    return "Regex pattern uses lookaround or backreferences, which are not supported";
+  }
+  return null;
+}
+
+export const wrapLikeValue = (type: FilterType, value: string | number): string => {
   const v = String(value);
-  if (type === "contains" || type === "not_contains") return `%${v}%`;
-  if (type === "starts_with") return `${v}%`;
-  if (type === "ends_with") return `%${v}`;
+  if (type === "contains" || type === "not_contains") return `%${escapeLikePattern(v)}%`;
+  if (type === "starts_with") return `${escapeLikePattern(v)}%`;
+  if (type === "ends_with") return `%${escapeLikePattern(v)}`;
   return v;
+};
+
+// Renders one filter condition against a column expression: null checks,
+// validated regex matches, and (NOT) LIKE / comparison operators with
+// NOT-IN-style AND-joining for negative filters. Shared by every filter→SQL
+// surface (events, bots, lite) so escaping and joiner semantics can only be
+// fixed in one place.
+export const buildStringFilterCondition = (
+  expression: string,
+  filterType: FilterType,
+  values: (string | number)[]
+): string => {
+  if (filterType === "is_null") {
+    return `(${expression} IS NULL OR ${expression} = '')`;
+  }
+  if (filterType === "is_not_null") {
+    return `(${expression} IS NOT NULL AND ${expression} != '')`;
+  }
+
+  if (filterType === "regex" || filterType === "not_regex") {
+    const pattern = String(values[0] ?? "");
+
+    const regexError = validateRegexPattern(pattern);
+    if (regexError) {
+      throw new Error(regexError);
+    }
+
+    const matchExpr = `match(${expression}, ${SqlString.escape(pattern)})`;
+    return filterType === "regex" ? matchExpr : `NOT ${matchExpr}`;
+  }
+
+  const op = filterTypeToOperator(filterType);
+  // Negative filters must AND-join across values (NOT IN semantics): OR-joining
+  // negations is a tautology — (x != 'a' OR x != 'b') matches every row.
+  const joiner = filterType === "not_equals" || filterType === "not_contains" ? " AND " : " OR ";
+  const condition =
+    values.length === 1
+      ? `${expression} ${op} ${SqlString.escape(wrapLikeValue(filterType, values[0]))}`
+      : `(${values
+          .map(value => `${expression} ${op} ${SqlString.escape(wrapLikeValue(filterType, value))}`)
+          .join(joiner)})`;
+
+  return condition;
 };
 
 export const getSqlParam = (parameter: FilterParameter) => {
@@ -76,10 +172,10 @@ export const getSqlParam = (parameter: FilterParameter) => {
     return "domainWithoutWWW(referrer)";
   }
   if (parameter === "entry_page") {
-    return "(SELECT argMin(pathname, timestamp) FROM events WHERE session_id = events.session_id)";
+    return "(SELECT argMinIf(pathname, timestamp_ms, type = 'pageview') FROM events WHERE session_id = events.session_id)";
   }
   if (parameter === "exit_page") {
-    return "(SELECT argMax(pathname, timestamp) FROM events WHERE session_id = events.session_id)";
+    return "(SELECT argMaxIf(pathname, timestamp_ms, type = 'pageview') FROM events WHERE session_id = events.session_id)";
   }
   if (parameter === "dimensions") {
     return "concat(toString(screen_width), 'x', toString(screen_height))";
@@ -100,6 +196,105 @@ export const getSqlParam = (parameter: FilterParameter) => {
   return filterParamSchema.parse(parameter);
 };
 
+// Parameters stored as numbers. Only these take numeric comparisons, and they
+// take no string operators: either mismatch renders SQL ClickHouse rejects
+// (`browser > 5`, `lat LIKE '%4%'`).
+const NUMERIC_PARAMS: ReadonlySet<FilterParameter> = new Set<FilterParameter>(["lat", "lon"]);
+const NUMERIC_COMPARISON_TYPES: ReadonlySet<FilterType> = new Set<FilterType>([
+  "greater_than",
+  "less_than",
+  "greater_than_or_equal",
+  "less_than_or_equal",
+]);
+const STRING_ONLY_TYPES: ReadonlySet<FilterType> = new Set<FilterType>([
+  "contains",
+  "not_contains",
+  "starts_with",
+  "ends_with",
+  "regex",
+  "not_regex",
+]);
+
+/** Throws when a filter's operator or values cannot apply to its parameter's type. */
+const assertFilterTypeCompatible = (
+  parameter: FilterParameter,
+  filterType: FilterType,
+  values: (string | number)[]
+) => {
+  const isNumericParam = NUMERIC_PARAMS.has(parameter);
+  if (NUMERIC_COMPARISON_TYPES.has(filterType) && !isNumericParam) {
+    throw new Error(`${filterType} filters only apply to lat and lon, not "${parameter}"`);
+  }
+  if (STRING_ONLY_TYPES.has(filterType) && isNumericParam) {
+    throw new Error(`${filterType} filters do not apply to the numeric parameter "${parameter}"`);
+  }
+  if (isNumericParam && filterType !== "is_null" && filterType !== "is_not_null") {
+    const invalid = values.find(value => !Number.isFinite(Number(value)));
+    if (invalid !== undefined) {
+      throw new Error(`Invalid numeric value for ${filterType} filter: ${invalid}`);
+    }
+  }
+};
+
+// Several filter expressions are built from more than one column — city is
+// `region-city`, browser_version `browser version`, dimensions `WxH` — so they
+// are never empty even when the value is unknown, and lat/lon are numbers that
+// cannot be compared with ''. Null checks test the stored column instead.
+const NULL_CHECK_COLUMNS: Partial<Record<FilterParameter, string>> = {
+  city: "city",
+  browser_version: "browser_version",
+  operating_system_version: "operating_system_version",
+};
+
+const buildNullCheckCondition = (
+  parameter: FilterParameter,
+  filterType: "is_null" | "is_not_null",
+  mapField: (expression: string) => string
+): string => {
+  const isNull = filterType === "is_null";
+  if (NUMERIC_PARAMS.has(parameter)) {
+    // Unknown coordinates are stored as 0.
+    const column = mapField(getSqlParam(parameter));
+    return isNull ? `${column} = 0` : `${column} != 0`;
+  }
+  if (parameter === "dimensions") {
+    return isNull ? "(screen_width = 0 AND screen_height = 0)" : "(screen_width != 0 OR screen_height != 0)";
+  }
+  return buildStringFilterCondition(mapField(NULL_CHECK_COLUMNS[parameter] ?? getSqlParam(parameter)), filterType, []);
+};
+
+/**
+ * Returns why a request's `filters` param can't be used, or null when it is
+ * valid or absent. Builds the statement once so regex and numeric checks run
+ * too: handlers throw on the same input, which surfaced as a 500.
+ */
+export function filterParamError(filters: unknown): string | null {
+  if (filters === undefined || filters === "") {
+    return null;
+  }
+  if (typeof filters !== "string") {
+    return "filters must be a JSON array";
+  }
+  try {
+    // An empty value list builds `AND ()`, which ClickHouse rejects.
+    const empty = validateFilters(filters).find(
+      filter => filter.type !== "is_null" && filter.type !== "is_not_null" && filter.value.length === 0
+    );
+    if (empty) {
+      return `filter on "${empty.parameter}" needs at least one value`;
+    }
+    getFilterStatement(filters);
+    return null;
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return error.issues
+        .map(issue => (issue.path.length ? `${issue.path.join(".")}: ` : "") + issue.message)
+        .join("; ");
+    }
+    return error instanceof Error ? error.message : "Invalid filters";
+  }
+}
+
 export function getFilterStatement(
   filters: string,
   siteId?: number,
@@ -111,127 +306,96 @@ export function getFilterStatement(
   }
 
   // Sanitize inputs with Zod
-  const filtersArray = validateFilters(filters);
+  const allowlist = options?.parameterAllowlist;
+  const filtersArray = validateFilters(filters).filter(filter => !allowlist || allowlist.has(filter.parameter));
 
   if (filtersArray.length === 0) {
     return "";
   }
 
   const sessionLevelParams = options?.sessionLevelParams ?? DEFAULT_SESSION_LEVEL_PARAMS;
+
+  // Map an emitted column expression to its CTE alias, if the caller provided
+  // one. Applied at column-identifier emission time — never as a rewrite over
+  // finished SQL — so user-supplied values can't be affected.
+  const mapField = (expression: string): string => options?.fieldMappings?.[expression] ?? expression;
+
   const siteIdFilter = siteId ? `site_id = ${siteId}` : "";
   // Strip leading "AND " from timeStatement since we'll be constructing WHERE clauses
   const timeFilter = timeStatement ? timeStatement.replace(/^AND\s+/i, "").trim() : "";
-
-  const buildStringFilterCondition = (
-    expression: string,
-    filterType: FilterType,
-    values: (string | number)[],
-    _legacyWildcardPrefix?: string
-  ): string => {
-    if (filterType === "is_null") {
-      return `(${expression} IS NULL OR ${expression} = '')`;
-    }
-    if (filterType === "is_not_null") {
-      return `(${expression} IS NOT NULL AND ${expression} != '')`;
-    }
-
-    if (filterType === "regex" || filterType === "not_regex") {
-      const pattern = String(values[0] ?? "");
-
-      if (!pattern) {
-        throw new Error("Regex pattern cannot be empty");
-      }
-
-      try {
-        new RegExp(pattern);
-      } catch (e) {
-        throw new Error(`Invalid regex pattern: ${e instanceof Error ? e.message : "Unknown error"}`);
-      }
-
-      if (pattern.length > 500) {
-        throw new Error("Regex pattern too long (max 500 characters)");
-      }
-
-      const matchExpr = `match(${expression}, ${SqlString.escape(pattern)})`;
-      return filterType === "regex" ? matchExpr : `NOT ${matchExpr}`;
-    }
-
-    const op = filterTypeToOperator(filterType);
-    const condition =
-      values.length === 1
-        ? `${expression} ${op} ${SqlString.escape(wrapLikeValue(filterType, values[0]))}`
-        : `(${values
-            .map(value => `${expression} ${op} ${SqlString.escape(wrapLikeValue(filterType, value))}`)
-            .join(" OR ")})`;
-
-    return condition;
-  };
 
   // Helper to build session-level subquery for a parameter
   const buildSessionLevelSubquery = (
     param: FilterParameter,
     filterType: FilterType,
-    values: (string | number)[],
-    wildcardPrefix: string
+    values: (string | number)[]
   ): string => {
     const whereClause = [siteIdFilter, timeFilter].filter(Boolean).join(" AND ");
-    const condition = buildStringFilterCondition(param, filterType, values, wildcardPrefix);
+    // getSqlParam keeps transformed params (city, browser_version, ...) correct
+    // inside the subquery. fieldMappings deliberately do NOT apply here: the
+    // subquery selects from the raw events table, where the caller's CTE
+    // aliases don't exist.
+    const negatedSessionFilterTypes: Partial<Record<FilterType, FilterType>> = {
+      not_equals: "equals",
+      not_contains: "contains",
+      not_regex: "regex",
+      is_null: "is_not_null",
+    };
+    const positiveFilterType = negatedSessionFilterTypes[filterType] ?? filterType;
+    const condition =
+      positiveFilterType === "is_null" || positiveFilterType === "is_not_null"
+        ? buildNullCheckCondition(param, positiveFilterType, expression => expression)
+        : buildStringFilterCondition(getSqlParam(param), positiveFilterType, values);
+    const membershipOperator = negatedSessionFilterTypes[filterType] ? "NOT IN" : "IN";
 
     const finalWhere = whereClause ? `WHERE ${whereClause} AND ${condition}` : `WHERE ${condition}`;
 
-    return `session_id IN (
+    return `session_id ${membershipOperator} (
             SELECT DISTINCT session_id
             FROM events
             ${finalWhere}
           )`;
   };
 
-  const buildSessionFirstValueSubquery = (
-    param: FilterParameter,
-    alias: string,
-    filterType: FilterType,
-    values: (string | number)[],
-    wildcardPrefix: string
-  ): string => {
-    const whereClause = [siteIdFilter, timeFilter, `${param} IS NOT NULL`, `${param} <> ''`]
-      .filter(Boolean)
-      .join(" AND ");
-    const condition = buildStringFilterCondition(alias, filterType, values, wildcardPrefix);
+  const buildSessionChannelSubquery = (filterType: FilterType, values: (string | number)[]): string => {
+    const whereClause = [siteIdFilter, timeFilter].filter(Boolean).join(" AND ");
+    const whereStatement = whereClause ? `WHERE ${whereClause}` : "";
+    const condition = buildStringFilterCondition("session_channel", filterType, values);
 
     return `session_id IN (
             SELECT session_id
             FROM (
               SELECT
                 session_id,
-                argMin(${param}, timestamp) AS ${alias}
+                ${SESSION_CHANNEL_AGG} AS session_channel
               FROM events
-              WHERE ${whereClause}
+              ${whereStatement}
               GROUP BY session_id
             )
             WHERE ${condition}
           )`;
   };
 
-  let result =
+  const result =
     "AND " +
     filtersArray
       .map(filter => {
-        const x = filter.type === "contains" || filter.type === "not_contains" ? "%" : "";
-        const isNumericParam = filter.parameter === "lat" || filter.parameter === "lon";
-        const isNullCheck = filter.type === "is_null" || filter.type === "is_not_null";
+        const isNumericParam = NUMERIC_PARAMS.has(filter.parameter);
+
+        assertFilterTypeCompatible(filter.parameter, filter.type, filter.value);
 
         // Handle session-level filters (configurable via options).
-        // Most parameters match sessions containing an event; channel uses the session's first value.
+        // Most parameters match sessions containing an event; channel uses the session's first attributed value.
         if (sessionLevelParams.includes(filter.parameter)) {
           if (filter.parameter === "channel") {
-            return buildSessionFirstValueSubquery(filter.parameter, "session_channel", filter.type, filter.value, x);
+            return buildSessionChannelSubquery(filter.type, filter.value);
           }
 
-          return buildSessionLevelSubquery(filter.parameter, filter.type, filter.value, x);
+          return buildSessionLevelSubquery(filter.parameter, filter.type, filter.value);
         }
 
         if (filter.parameter === "entry_page") {
-          const whereClause = [siteIdFilter, timeFilter].filter(Boolean).join(" AND ");
+          const whereClause = [siteIdFilter, timeFilter, "type = 'pageview'"].filter(Boolean).join(" AND ");
           const whereStatement = whereClause ? `WHERE ${whereClause}` : "";
           const condition = buildStringFilterCondition("entry_pathname", filter.type, filter.value);
 
@@ -240,7 +404,7 @@ export function getFilterStatement(
             FROM (
               SELECT
                 session_id,
-                argMin(pathname, timestamp) AS entry_pathname
+                argMin(pathname, timestamp_ms) AS entry_pathname
               FROM events
               ${whereStatement}
               GROUP BY session_id
@@ -250,7 +414,7 @@ export function getFilterStatement(
         }
 
         if (filter.parameter === "exit_page") {
-          const whereClause = [siteIdFilter, timeFilter].filter(Boolean).join(" AND ");
+          const whereClause = [siteIdFilter, timeFilter, "type = 'pageview'"].filter(Boolean).join(" AND ");
           const whereStatement = whereClause ? `WHERE ${whereClause}` : "";
           const condition = buildStringFilterCondition("exit_pathname", filter.type, filter.value);
 
@@ -259,7 +423,7 @@ export function getFilterStatement(
             FROM (
               SELECT
                 session_id,
-                argMax(pathname, timestamp) AS exit_pathname
+                argMax(pathname, timestamp_ms) AS exit_pathname
               FROM events
               ${whereStatement}
               GROUP BY session_id
@@ -271,7 +435,7 @@ export function getFilterStatement(
         // Special handling for user_id to also check identified_user_id
         // This is needed because URLs may contain either the device fingerprint (user_id)
         // or the custom identified user ID (identified_user_id)
-        if (filter.parameter === "user_id") {
+        if (filter.parameter === "user_id" && (options?.dualUserIdColumns ?? true)) {
           if (filter.type === "is_null") {
             return `((user_id IS NULL OR user_id = '') AND (identified_user_id IS NULL OR identified_user_id = ''))`;
           }
@@ -282,17 +446,17 @@ export function getFilterStatement(
             if (filter.value.length === 1) {
               const escapedValue = SqlString.escape(filter.value[0]);
               if (filter.type === "equals") {
-                return `(user_id = ${escapedValue} OR identified_user_id = ${escapedValue})`;
+                return matchesUser(escapedValue);
               }
-              return `(user_id != ${escapedValue} AND identified_user_id != ${escapedValue})`;
+              return doesNotMatchUser(escapedValue);
             }
 
             const conditions = filter.value.map(value => {
               const escapedValue = SqlString.escape(value);
               if (filter.type === "equals") {
-                return `(user_id = ${escapedValue} OR identified_user_id = ${escapedValue})`;
+                return matchesUser(escapedValue);
               }
-              return `(user_id != ${escapedValue} AND identified_user_id != ${escapedValue})`;
+              return doesNotMatchUser(escapedValue);
             });
 
             if (filter.type === "equals") {
@@ -302,12 +466,12 @@ export function getFilterStatement(
           }
         }
 
-        if (isNullCheck) {
-          return buildStringFilterCondition(getSqlParam(filter.parameter), filter.type, filter.value);
+        if (filter.type === "is_null" || filter.type === "is_not_null") {
+          return buildNullCheckCondition(filter.parameter, filter.type, mapField);
         }
 
         if (filter.type === "regex" || filter.type === "not_regex") {
-          return buildStringFilterCondition(getSqlParam(filter.parameter), filter.type, filter.value, x);
+          return buildStringFilterCondition(mapField(getSqlParam(filter.parameter)), filter.type, filter.value);
         }
 
         // Handle numeric comparison filters (>, <, >=, <=)
@@ -321,51 +485,44 @@ export function getFilterStatement(
           if (isNaN(numericValue)) {
             throw new Error(`Invalid numeric value for ${filter.type} filter: ${filter.value[0]}`);
           }
-          return `${getSqlParam(filter.parameter)} ${filterTypeToOperator(filter.type)} ${numericValue}`;
+          return `${mapField(getSqlParam(filter.parameter))} ${filterTypeToOperator(filter.type)} ${numericValue}`;
         }
 
         if (filter.type === "starts_with" || filter.type === "ends_with") {
-          return buildStringFilterCondition(getSqlParam(filter.parameter), filter.type, filter.value);
+          return buildStringFilterCondition(mapField(getSqlParam(filter.parameter)), filter.type, filter.value);
         }
 
         // Special handling for lat/lon with tolerance (only for equals/not_equals)
         if (filter.parameter === "lat" || filter.parameter === "lon") {
           const tolerance = 0.001;
-          if (filter.value.length === 1) {
-            const targetValue = Number(filter.value[0]);
-            return `${filter.parameter} >= ${targetValue - tolerance} AND ${filter.parameter} <= ${targetValue + tolerance}`;
-          }
-
+          const column = mapField(getSqlParam(filter.parameter));
           const rangeConditions = filter.value.map(value => {
             const targetValue = Number(value);
-            return `(${filter.parameter} >= ${targetValue - tolerance} AND ${filter.parameter} <= ${targetValue + tolerance})`;
+            return `(${column} >= ${targetValue - tolerance} AND ${column} <= ${targetValue + tolerance})`;
           });
-
-          return `(${rangeConditions.join(" OR ")})`;
+          const rangeCondition =
+            rangeConditions.length === 1 ? rangeConditions[0] : `(${rangeConditions.join(" OR ")})`;
+          return filter.type === "not_equals" ? `NOT ${rangeCondition}` : rangeCondition;
         }
 
         if (filter.value.length === 1) {
-          const value = isNumericParam ? filter.value[0] : SqlString.escape(x + filter.value[0] + x);
-          return `${getSqlParam(filter.parameter)} ${filterTypeToOperator(filter.type)} ${value}`;
+          const value = isNumericParam
+            ? filter.value[0]
+            : SqlString.escape(wrapLikeValue(filter.type, filter.value[0]));
+          return `${mapField(getSqlParam(filter.parameter))} ${filterTypeToOperator(filter.type)} ${value}`;
         }
 
+        // Negative filters must AND-join across values (NOT IN semantics): OR-joining
+        // negations is a tautology — (x != 'a' OR x != 'b') matches every row.
+        const joiner = filter.type === "not_equals" || filter.type === "not_contains" ? " AND " : " OR ";
         const valuesWithOperator = filter.value.map(value => {
-          const escapedValue = isNumericParam ? value : SqlString.escape(x + value + x);
-          return `${getSqlParam(filter.parameter)} ${filterTypeToOperator(filter.type)} ${escapedValue}`;
+          const escapedValue = isNumericParam ? value : SqlString.escape(wrapLikeValue(filter.type, value));
+          return `${mapField(getSqlParam(filter.parameter))} ${filterTypeToOperator(filter.type)} ${escapedValue}`;
         });
 
-        return `(${valuesWithOperator.join(" OR ")})`;
+        return `(${valuesWithOperator.join(joiner)})`;
       })
       .join(" AND ");
-
-  // Apply field mappings if provided (for CTEs that extract fields to different column names)
-  if (options?.fieldMappings) {
-    for (const [from, to] of Object.entries(options.fieldMappings)) {
-      // Escape special regex characters in the 'from' string
-      const escapedFrom = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      result = result.replace(new RegExp(escapedFrom, "g"), to);
-    }
-  }
 
   return result;
 }

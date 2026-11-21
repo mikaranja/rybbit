@@ -1,16 +1,11 @@
-import { BackgroundGrid } from "@/components/BackgroundGrid";
 import { CTASection } from "@/components/CTASection";
+import { InteriorPageHero } from "@/components/InteriorPageHero";
 import { createOGImageUrl } from "@/lib/metadata";
-import { cn } from "@/lib/utils";
 import { ArrowRight } from "lucide-react";
 import type { Metadata } from "next";
-import { Tilt_Warp } from "next/font/google";
 import Link from "next/link";
-
-const tilt_wrap = Tilt_Warp({
-  subsets: ["latin"],
-  weight: "400",
-});
+import { comparedCompetitors } from "./data/competitors";
+import { vsPairName, vsPairs } from "./data/vsPairs";
 
 export const metadata: Metadata = {
   title: "Rybbit vs The Competition: Analytics Alternatives Compared",
@@ -48,46 +43,68 @@ export const metadata: Metadata = {
   },
 };
 
-const competitors = [
+// Names, card text, and order come from the competitor registry (data/competitors.ts).
+const competitors = comparedCompetitors.flatMap((competitor) =>
+  competitor.hubDescription
+    ? [{ name: competitor.name, href: competitor.comparePath, description: competitor.hubDescription }]
+    : []
+);
+
+const guides = [
   {
-    name: "Google Analytics",
-    slug: "google-analytics",
-    description: "Privacy-first alternative to the most popular analytics platform",
+    title: "Best Google Analytics alternatives",
+    href: "/blog/best-google-analytics-alternatives",
+    description: "Nine GA4 alternatives compared on price, privacy, and features",
   },
   {
-    name: "Plausible",
-    slug: "plausible",
-    description: "More features with the same privacy-first approach",
+    title: "Best web analytics tools",
+    href: "/blog/best-web-analytics-tools",
+    description: "Ten tools compared by use case",
   },
   {
-    name: "PostHog",
-    slug: "posthog",
-    description: "Focused web analytics vs all-in-one product suite",
+    title: "Amplitude alternatives",
+    href: "/blog/amplitude-alternatives",
+    description: "Nine product analytics tools ranked for teams leaving Amplitude",
   },
   {
-    name: "Umami",
-    slug: "umami",
-    description: "Advanced features on top of open-source simplicity",
+    title: "Mixpanel alternatives",
+    href: "/blog/mixpanel-alternatives",
+    description: "Nine options, organized by why teams switch",
   },
   {
-    name: "Fathom",
-    slug: "fathom",
-    description: "Open-source transparency with deeper analytics",
+    title: "Hotjar alternatives",
+    href: "/blog/hotjar-alternatives",
+    description: "Heatmaps, replay, and surveys: what each tool replaces",
   },
   {
-    name: "Simple Analytics",
-    slug: "simpleanalytics",
-    description: "Feature-rich analytics without sacrificing privacy",
+    title: "FullStory alternatives",
+    href: "/blog/fullstory-alternatives",
+    description: "Eleven tools by use case, from enterprise DXA to open source",
   },
   {
-    name: "Matomo",
-    slug: "matomo",
-    description: "Modern alternative to the legacy PHP analytics platform",
+    title: "PostHog pricing, explained",
+    href: "/blog/posthog-pricing",
+    description: "Free tiers, per-unit rates, and four worked examples",
   },
   {
-    name: "Cloudflare Analytics",
-    slug: "cloudflare-analytics",
-    description: "Full-featured analytics beyond basic traffic metrics",
+    title: "Mixpanel pricing, explained",
+    href: "/blog/mixpanel-pricing",
+    description: "Plans, calculator prices, add-ons, and overages",
+  },
+  {
+    title: "Google Analytics pricing",
+    href: "/blog/google-analytics-pricing",
+    description: "What GA4 and GA 360 cost, and the hidden costs of free",
+  },
+  {
+    title: "Best analytics MCP servers",
+    href: "/blog/best-analytics-mcp-servers",
+    description: "GA4, PostHog, Mixpanel, Amplitude, and more, compared for AI assistants",
+  },
+  {
+    title: "Best session replay tools",
+    href: "/blog/best-session-replay-tools",
+    description: "Ten replay tools, including free and open-source options",
   },
 ];
 
@@ -101,7 +118,7 @@ const structuredData = {
     "@type": "ListItem",
     position: i + 1,
     name: `Rybbit vs ${c.name}`,
-    url: `https://rybbit.com/compare/${c.slug}`,
+    url: `https://rybbit.com${c.href}`,
   })),
 };
 
@@ -112,43 +129,102 @@ export default function ComparePage() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
       />
-      <div className="flex flex-col items-center justify-center overflow-x-hidden pt-16 md:pt-24">
-        <BackgroundGrid />
-        <div className="relative flex flex-col py-8">
-          <h1
-            className={cn(
-              "relative z-10 text-4xl md:text-5xl lg:text-7xl font-medium px-4 tracking-tight max-w-4xl text-center text-transparent bg-clip-text bg-gradient-to-b from-neutral-900 via-neutral-700 to-neutral-500 dark:from-white dark:via-gray-100 dark:to-gray-400",
-              tilt_wrap.className
-            )}
-          >
-            Rybbit vs The Competition
-          </h1>
-          <h2 className="relative z-10 text-base md:text-xl pt-4 md:pt-6 px-4 tracking-tight max-w-3xl text-center text-neutral-600 dark:text-neutral-300 font-light mx-auto">
-            See how Rybbit stacks up against every major analytics platform. Privacy-first, open source, and built for modern teams.
-          </h2>
-        </div>
+      <div className="overflow-x-clip">
+        <InteriorPageHero
+          eyebrow="Platform comparisons"
+          title="Rybbit vs The Competition"
+          description="See how Rybbit stacks up against every major analytics platform. Privacy-first and open source."
+          eventLocation="comparison_hub_hero"
+        />
 
-        <section className="w-full max-w-4xl mx-auto px-4 py-12 z-10">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <section className="border-b border-neutral-200 dark:border-neutral-800" aria-labelledby="comparison-directory-title">
+          <div className="mx-auto grid max-w-[1200px] border-x border-neutral-200 dark:border-neutral-800 lg:grid-cols-12">
+            <div className="border-b border-neutral-200 px-5 py-12 dark:border-neutral-800 sm:px-8 lg:col-span-4 lg:border-b-0 lg:border-r lg:px-10 lg:py-16">
+              <div className="lg:sticky lg:top-24">
+                <h2 id="comparison-directory-title" className="text-3xl font-semibold tracking-[-0.03em] md:text-4xl">
+                  Compare the field
+                </h2>
+                <p className="mt-5 max-w-sm text-base leading-7 text-neutral-600 dark:text-neutral-400">
+                  Direct comparisons across product scope, privacy, ownership, and pricing.
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-px bg-neutral-200 dark:bg-neutral-800 lg:col-span-8 md:grid-cols-2">
             {competitors.map((competitor) => (
               <Link
-                key={competitor.slug}
-                href={`/compare/${competitor.slug}`}
-                className="group bg-neutral-200/40 dark:bg-neutral-900/40 p-2 rounded-3xl border border-neutral-300 dark:border-neutral-800 hover:border-emerald-500/30 dark:hover:border-emerald-500/20 transition-colors"
+                key={competitor.href}
+                href={competitor.href}
+                className="group flex min-h-48 flex-col justify-between bg-white px-5 py-9 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-neutral-500 dark:bg-neutral-950 dark:hover:bg-neutral-900/60 sm:px-8 lg:px-10"
               >
-                <div className="bg-neutral-50 dark:bg-neutral-900 backdrop-blur-sm rounded-2xl border border-neutral-300 dark:border-neutral-800 group-hover:border-emerald-500/20 dark:group-hover:border-emerald-500/10 p-6 h-full transition-colors">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-lg font-semibold">
-                      Rybbit vs {competitor.name}
-                    </h3>
-                    <ArrowRight className="w-4 h-4 text-neutral-400 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all" />
-                  </div>
-                  <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                    {competitor.description}
-                  </p>
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.12em] text-neutral-400">Rybbit vs</p>
+                  <h3 className="mt-2 text-xl font-semibold tracking-tight">{competitor.name}</h3>
+                </div>
+                <div className="mt-8 flex items-end justify-between gap-4">
+                  <p className="max-w-xs text-sm leading-6 text-neutral-600 dark:text-neutral-400">{competitor.description}</p>
+                  <ArrowRight className="mb-1 size-4 shrink-0 text-neutral-400 transition-transform group-hover:translate-x-1 group-hover:text-emerald-500" aria-hidden="true" />
                 </div>
               </Link>
             ))}
+            </div>
+          </div>
+        </section>
+
+        {vsPairs.length > 0 && (
+          <section className="border-b border-neutral-200 dark:border-neutral-800" aria-labelledby="comparison-pairs-title">
+            <div className="mx-auto grid max-w-[1200px] grid-cols-1 border-x border-neutral-200 dark:border-neutral-800 lg:grid-cols-12">
+              <div className="border-b border-neutral-200 px-5 py-12 dark:border-neutral-800 sm:px-8 lg:col-span-4 lg:border-b-0 lg:border-r lg:px-10 lg:py-16">
+                <div className="lg:sticky lg:top-24">
+                  <h2 id="comparison-pairs-title" className="text-3xl font-semibold tracking-[-0.03em] md:text-4xl">
+                    Head-to-head comparisons
+                  </h2>
+                  <p className="mt-5 max-w-sm text-base leading-7 text-neutral-600 dark:text-neutral-400">
+                    If you&apos;re choosing between two other tools, these pages compare them directly, with a source for every claim.
+                  </p>
+                </div>
+              </div>
+              <div className="lg:col-span-8">
+                {vsPairs.map((pair) => (
+                  <Link
+                    key={pair.slug}
+                    href={`/compare/${pair.slug}`}
+                    className="group grid border-b border-neutral-200 px-5 py-7 last:border-b-0 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-neutral-500 dark:border-neutral-800 dark:hover:bg-neutral-900/60 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto] sm:items-center sm:gap-6 sm:px-8 lg:px-10"
+                  >
+                    <span className="font-semibold">{vsPairName(pair)}</span>
+                    <span className="mt-1 text-sm leading-6 text-neutral-500 dark:text-neutral-400 sm:mt-0">{pair.hubDescription}</span>
+                    <ArrowRight className="mt-4 size-4 text-neutral-400 transition-transform group-hover:translate-x-1 sm:mt-0" aria-hidden="true" />
+                  </Link>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
+        <section className="border-b border-neutral-200 dark:border-neutral-800" aria-labelledby="comparison-guides-title">
+          <div className="mx-auto grid max-w-[1200px] border-x border-neutral-200 dark:border-neutral-800 lg:grid-cols-12">
+            <div className="border-b border-neutral-200 px-5 py-12 dark:border-neutral-800 sm:px-8 lg:col-span-4 lg:border-b-0 lg:border-r lg:px-10 lg:py-16">
+              <div className="lg:sticky lg:top-24">
+                <h2 id="comparison-guides-title" className="text-3xl font-semibold tracking-[-0.03em] md:text-4xl">
+                  Buying guides
+                </h2>
+                <p className="mt-5 max-w-sm text-base leading-7 text-neutral-600 dark:text-neutral-400">
+                  If you&apos;re weighing more than two tools, these roundups compare the wider field, Rybbit included.
+                </p>
+              </div>
+            </div>
+            <div className="lg:col-span-8">
+              {guides.map((guide) => (
+                <Link
+                  key={guide.href}
+                  href={guide.href}
+                  className="group grid border-b border-neutral-200 px-5 py-7 last:border-b-0 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-neutral-500 dark:border-neutral-800 dark:hover:bg-neutral-900/60 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto] sm:items-center sm:gap-6 sm:px-8 lg:px-10"
+                >
+                  <span className="font-semibold">{guide.title}</span>
+                  <span className="mt-1 text-sm leading-6 text-neutral-500 dark:text-neutral-400 sm:mt-0">{guide.description}</span>
+                  <ArrowRight className="mt-4 size-4 text-neutral-400 transition-transform group-hover:translate-x-1 sm:mt-0" aria-hidden="true" />
+                </Link>
+              ))}
+            </div>
           </div>
         </section>
 

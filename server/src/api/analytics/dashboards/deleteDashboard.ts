@@ -35,7 +35,7 @@ export async function deleteDashboard(
       return reply.status(403).send({ error: "Dashboard does not belong to the specified site" });
     }
 
-    // Site access is enforced by the `authSite` (requireSiteAccess) preHandler.
+    // The route guard enforces dashboards:write on the site.
     const result = await db
       .delete(dashboards)
       .where(eq(dashboards.dashboardId, dashboardId))
@@ -47,7 +47,7 @@ export async function deleteDashboard(
 
     return reply.send({ success: true });
   } catch (error) {
-    console.error("Error deleting dashboard:", error);
+    request.log.error({ err: error }, "Error deleting dashboard");
     return reply.status(500).send({ error: "Failed to delete dashboard" });
   }
 }

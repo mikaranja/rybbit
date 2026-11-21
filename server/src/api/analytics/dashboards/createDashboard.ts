@@ -19,7 +19,7 @@ export async function createDashboard(
   try {
     const { name, config } = createDashboardSchema.parse(request.body);
 
-    // Site access is enforced by the `authSite` (requireSiteAccess) preHandler.
+    // The route guard enforces dashboards:write on the site.
     const result = await db
       .insert(dashboards)
       .values({
@@ -39,7 +39,7 @@ export async function createDashboard(
     if (error instanceof z.ZodError) {
       return reply.status(400).send({ error: "Validation error", details: error.errors });
     }
-    console.error("Error creating dashboard:", error);
+    request.log.error({ err: error }, "Error creating dashboard");
     return reply.status(500).send({ error: "Failed to create dashboard" });
   }
 }

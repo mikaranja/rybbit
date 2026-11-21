@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../../compone
 import { Button } from "../../../../../components/ui/button";
 import { Card, CardContent, CardLoader } from "../../../../../components/ui/card";
 import { ScrollArea } from "../../../../../components/ui/scroll-area";
+import { useCanOnSite } from "../../../../../hooks/usePermissions";
 import { formatter, getCountryName, truncateString } from "../../../../../lib/utils";
 import { CountryFlag } from "../../../components/shared/icons/CountryFlag";
 import { DeviceIcon } from "../../../components/shared/icons/Device";
@@ -23,15 +24,26 @@ function ConnectPrompt() {
   const { mutate: connect, isPending } = useConnectGSC();
   const t = useExtracted();
 
+  // Connecting completes an OAuth flow that requires gsc:write on the server.
+  // Anyone without it would be stranded on a 403 after Google consent, so show
+  // them an explanation instead of a button they can't complete.
+  const canConnect = useCanOnSite("gsc:write");
+
   return (
     <div className="flex flex-col items-center justify-center mt-12 gap-4">
       <div className="text-sm text-neutral-600 dark:text-neutral-400 text-center max-w-sm">
         {t("Connect your Google Search Console account to view search performance data including top keywords and pages.")}
       </div>
-      <Button onClick={() => connect()} disabled={isPending}>
-        <SiGoogle />
-        {isPending ? t("Connecting...") : t("Connect Google Search Console")}
-      </Button>
+      {canConnect ? (
+        <Button onClick={() => connect()} disabled={isPending}>
+          <SiGoogle />
+          {isPending ? t("Connecting...") : t("Connect Google Search Console")}
+        </Button>
+      ) : (
+        <div className="text-sm text-neutral-500 text-center max-w-sm">
+          {t("Ask a site admin to connect Google Search Console.")}
+        </div>
+      )}
     </div>
   );
 }

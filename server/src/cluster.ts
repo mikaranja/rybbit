@@ -3,10 +3,15 @@ import { initializeClickhouse } from "./db/clickhouse/clickhouse.js";
 import { initPostgres } from "./db/postgres/initPostgres.js";
 import { IS_CLOUD } from "./lib/const.js";
 import { createServiceLogger } from "./lib/logger/logger.js";
-import { reengagementService } from "./services/reengagement/reengagementService.js";
+import { lifecycleEmailService } from "./services/lifecycleEmails/lifecycleEmailService.js";
 import { sessionsService } from "./services/sessions/sessionsService.js";
 import { telemetryService } from "./services/telemetryService.js";
-import { usageService } from "./services/usageService.js";
+import { unclaimedSiteCleanupService } from "./services/sites/unclaimedSiteCleanupService.js";
+import {
+  REFRESH_ORGANIZATION_USAGE_MESSAGE,
+  USAGE_STATE_REQUEST_MESSAGE,
+  usageService,
+} from "./services/usageService.js";
 import { weeklyReportService } from "./services/weekyReports/weeklyReportService.js";
 
 const logger = createServiceLogger("cluster");
@@ -24,10 +29,7 @@ process.on("unhandledRejection", reason => {
 // Determine worker count from environment variable
 // Default to 0 (single-process mode) if not set
 const requestedWorkers = process.env.CLUSTER_WORKERS;
-const workerCount =
-  requestedWorkers === undefined || requestedWorkers === ""
-    ? 0
-    : parseInt(requestedWorkers, 10);
+const workerCount = requestedWorkers === undefined || requestedWorkers === "" ? 0 : parseInt(requestedWorkers, 10);
 
 if (workerCount === 0) {
   // Single-process mode — no clustering, same as running index.ts directly
@@ -48,14 +50,15 @@ if (workerCount === 0) {
   // Start cron jobs on the primary process only
   telemetryService.startTelemetryCron();
   usageService.startUsageCheckCron();
+  unclaimedSiteCleanupService.startCleanupCron();
   if (IS_CLOUD && process.env.NODE_ENV !== "development") {
     weeklyReportService.startWeeklyReportCron();
-    reengagementService.startReengagementCron();
+    lifecycleEmailService.startLifecycleCron();
   }
 
-  // Broadcast sitesOverLimit to workers after each usage update
+  // Broadcast usage state (sitesOverLimit + sitesWithoutReplay) to workers after each usage update
   usageService.onUsageUpdated(() => {
-    broadcastSitesOverLimit();
+    broadcastUsageState();
   });
 
   // Fork workers
@@ -65,11 +68,22 @@ if (workerCount === 0) {
     cluster.fork();
   }
 
-  // Send current sitesOverLimit to a worker when it comes online
-  cluster.on("online", (worker) => {
+  cluster.on("message", (worker, message: { type?: string; organizationId?: unknown }) => {
+    // Workers ask the primary to re-evaluate an organization's blocked sites when a trial
+    // starts or a site is added, so the change reaches every worker without waiting for the cron
+    if (message?.type === REFRESH_ORGANIZATION_USAGE_MESSAGE && typeof message.organizationId === "string") {
+      void usageService.refreshOrganizationWithRetry(message.organizationId);
+    }
+    // A starting worker asks for the current usage state once its listener is installed and
+    // waits for it before serving. Sending on "online" instead raced the worker's module
+    // loading, and a message that arrives before the listener exists is dropped.
+    if (message?.type === USAGE_STATE_REQUEST_MESSAGE && worker.isConnected()) {
+      worker.send(usageService.getUsageStateMessage());
+    }
+  });
+
+  cluster.on("online", worker => {
     logger.info(`Worker ${worker.process.pid} is online`);
-    const siteIds = Array.from(usageService.getSitesOverLimit());
-    worker.send({ type: "sites-over-limit", siteIds });
   });
 
   // Auto-restart crashed workers (unless shutting down)
@@ -78,24 +92,24 @@ if (workerCount === 0) {
       logger.info(`Worker ${worker.process.pid} exited during shutdown`);
       return;
     }
-    logger.warn(
-      `Worker ${worker.process.pid} died (code: ${code}, signal: ${signal}). Restarting...`
-    );
+    logger.warn(`Worker ${worker.process.pid} died (code: ${code}, signal: ${signal}). Restarting...`);
     cluster.fork();
   });
 
   /**
-   * Broadcast the current sitesOverLimit set to all alive workers via IPC
+   * Broadcast the current sitesOverLimit, sitesWithoutPlan and sitesWithoutReplay sets to all alive workers via IPC
    */
-  function broadcastSitesOverLimit() {
-    const siteIds = Array.from(usageService.getSitesOverLimit());
+  function broadcastUsageState() {
+    const message = usageService.getUsageStateMessage();
     for (const id in cluster.workers) {
       const worker = cluster.workers[id];
       if (worker && !worker.isDead()) {
-        worker.send({ type: "sites-over-limit", siteIds });
+        worker.send(message);
       }
     }
-    logger.debug(`Broadcasted ${siteIds.length} sites-over-limit to workers`);
+    logger.debug(
+      `Broadcasted ${message.sitesOverLimit.length} sites-over-limit, ${message.sitesWithoutPlan.length} sites-without-plan and ${message.sitesWithoutReplay.length} sites-without-replay to workers`
+    );
   }
 
   // Graceful shutdown
@@ -116,11 +130,12 @@ if (workerCount === 0) {
 
     // Stop cron jobs
     usageService.stopUsageCheckCron();
+    unclaimedSiteCleanupService.stopCleanupCron();
     void sessionsService.close();
     telemetryService.stopTelemetryCron();
     if (IS_CLOUD) {
       weeklyReportService.stopWeeklyReportCron();
-      reengagementService.stopReengagementCron();
+      lifecycleEmailService.stopLifecycleCron();
     }
 
     // Attach exit listeners before sending SIGTERM to avoid a race where
@@ -130,8 +145,8 @@ if (workerCount === 0) {
     );
 
     const workerExitPromises = activeWorkers.map(
-      (worker) =>
-        new Promise<void>((resolve) => {
+      worker =>
+        new Promise<void>(resolve => {
           worker.on("exit", () => resolve());
         })
     );

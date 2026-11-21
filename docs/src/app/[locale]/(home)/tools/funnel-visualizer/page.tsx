@@ -87,7 +87,7 @@ const structuredData = {
           name: "How can I improve my conversion funnel?",
           acceptedAnswer: {
             "@type": "Answer",
-            text: "Optimize high drop-off steps first by: simplifying forms and checkout processes, improving page load speed, enhancing trust signals and social proof, clarifying value propositions, reducing friction (fewer clicks), improving mobile experience, A/B testing changes, and removing distractions. Track these improvements with Rybbit Analytics to measure the actual impact on conversions.",
+            text: "Optimize high drop-off steps first by: simplifying forms and checkout processes, improving page load speed, enhancing trust signals and social proof, clarifying value propositions, reducing friction (fewer clicks), improving mobile experience, A/B testing changes, and removing distractions. Track these improvements with Rybbit Analytics to measure the impact on conversions.",
           },
         },
       ],
@@ -99,7 +99,7 @@ const educationalContent = (
   <>
     <h2 className="text-2xl font-bold text-neutral-900 dark:text-white mb-4">What is a Conversion Funnel?</h2>
     <p className="text-neutral-700 dark:text-neutral-300 leading-relaxed mb-4">
-      A conversion funnel visualizes the customer journey from initial awareness to final conversion. Just like a
+      A conversion funnel visualizes how people move from initial awareness to final conversion. Just like a
       physical funnel narrows toward the bottom, a conversion funnel shows how the number of users decreases at each
       step of your sales or signup process.
     </p>
@@ -141,7 +141,7 @@ const educationalContent = (
         more information.
       </li>
       <li>
-        <strong>Conversion:</strong> Users complete the desired action—purchase, signup, trial activation, or lead
+        <strong>Conversion:</strong> Users complete the desired action: purchase, signup, trial activation, or lead
         submission.
       </li>
       <li>
@@ -247,7 +247,7 @@ const faqs = [
         <Link href="https://app.rybbit.io" className="text-emerald-600 dark:text-emerald-400 hover:underline">
           Rybbit Analytics
         </Link>{" "}
-        to measure the actual impact on conversions.
+        to measure the impact on conversions.
       </>
     ),
   },
@@ -265,7 +265,7 @@ export default function FunnelVisualizerPage() {
       faqs={faqs}
       relatedToolsCategory="analytics"
       ctaTitle="Track funnels automatically with Rybbit"
-      ctaDescription="No manual data entry—Rybbit automatically tracks conversion funnels with real-time session data."
+      ctaDescription="No manual data entry. Rybbit automatically tracks conversion funnels with real-time session data."
       ctaEventLocation="funnel_visualizer_cta"
       structuredData={structuredData}
     />

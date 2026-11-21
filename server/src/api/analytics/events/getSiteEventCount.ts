@@ -1,9 +1,9 @@
 import { FilterParams } from "@rybbit/shared";
 import { FastifyReply, FastifyRequest } from "fastify";
-import { clickhouse } from "../../../db/clickhouse/clickhouse.js";
 import { TimeBucket } from "../types.js";
 import { getFilterStatement } from "../utils/getFilterStatement.js";
-import { getTimeStatement, processResults, TimeBucketToFn } from "../utils/utils.js";
+import { resolveTimeWindow, TimeBucketToFn } from "../utils/timeWindow.js";
+import { analyticsRoute, runAnalyticsQuery } from "../utils/analyticsQuery.js";
 
 export type GetSiteEventCountResponse = {
   time: string;
@@ -28,24 +28,21 @@ interface GetSiteEventCountRequest {
   }>;
 }
 
-export async function getSiteEventCount(
-  req: FastifyRequest<GetSiteEventCountRequest>,
-  res: FastifyReply
-) {
-  const site = req.params.siteId;
-  const { bucket = "day" } = req.query;
-  const timeZone = req.query.time_zone || "UTC";
+export const buildSiteEventCountQuery = (query: GetSiteEventCountRequest["Querystring"], siteId: number) => {
+  const { bucket = "day" } = query;
 
-  if (!TimeBucketToFn[bucket]) {
-    return res.status(400).send({ error: `Invalid bucket value: ${bucket}` });
-  }
+  const window = resolveTimeWindow(query);
+  const timeStatement = window.where();
+  const filterStatement = getFilterStatement(query.filters, siteId, timeStatement, {
+    sessionLevelParams: ["channel"],
+  });
 
-  const timeStatement = getTimeStatement(req.query);
-  const filterStatement = getFilterStatement(req.query.filters, Number(site), timeStatement);
-
-  const query = `
+  // Filled, so a bucket with no events is a zero row rather than a gap: the
+  // chart dips instead of interpolating, and the comparison period lines up
+  // with the current one bucket for bucket.
+  return `
     SELECT
-      toDateTime(${TimeBucketToFn[bucket]}(toTimeZone(timestamp, {timeZone:String}))) AS time,
+      ${window.bucketed("timestamp", bucket)} AS time,
       countIf(type = 'pageview') as pageview_count,
       countIf(type = 'custom_event') as custom_event_count,
       countIf(type = 'performance') as performance_count,
@@ -64,23 +61,26 @@ export async function getSiteEventCount(
       ${filterStatement}
     GROUP BY time
     ORDER BY time
+    ${window.fill(bucket)}
   `;
+};
 
-  try {
-    const result = await clickhouse.query({
-      query,
-      format: "JSONEachRow",
-      query_params: {
+export const getSiteEventCount = analyticsRoute<GetSiteEventCountRequest>(
+  "site event count",
+  async (req: FastifyRequest<GetSiteEventCountRequest>, res: FastifyReply) => {
+    const site = req.params.siteId;
+    const { bucket = "day" } = req.query;
+    if (!TimeBucketToFn[bucket]) {
+      return res.status(400).send({ error: `Invalid bucket value: ${bucket}` });
+    }
+
+    const data = await runAnalyticsQuery<GetSiteEventCountResponse[number]>({
+      query: buildSiteEventCountQuery(req.query, Number(site)),
+      params: {
         siteId: Number(site),
-        timeZone,
       },
     });
 
-    const data = await processResults<GetSiteEventCountResponse[number]>(result);
     return res.send({ data });
-  } catch (error) {
-    console.error("Generated Query:", query);
-    console.error("Error fetching site event count:", error);
-    return res.status(500).send({ error: "Failed to fetch site event count" });
   }
-}
+);

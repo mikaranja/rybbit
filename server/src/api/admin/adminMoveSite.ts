@@ -47,11 +47,13 @@ export async function adminMoveSite(
       return reply.status(404).send({ error: "Target organization not found" });
     }
 
-    await applySiteMove(siteId, site.organizationId, targetOrganizationId);
+    if (!(await applySiteMove(siteId, site.organizationId, targetOrganizationId))) {
+      return reply.status(409).send({ error: "The site moved while this request was in flight; reload and try again" });
+    }
 
     return reply.status(200).send({ success: true, organizationId: targetOrganizationId });
   } catch (error) {
-    console.error("Error moving site (admin):", error);
+    request.log.error({ err: error }, "Error moving site (admin)");
     return reply.status(500).send({ error: "Failed to move site" });
   }
 }

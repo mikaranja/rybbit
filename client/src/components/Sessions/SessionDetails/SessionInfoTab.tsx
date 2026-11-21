@@ -71,7 +71,7 @@ export function SessionInfoTab({
                       : generateName(sessionDetails.user_id)}
                   </span>
                   {isIdentified && (
-                    <IdentifiedBadge traits={session.traits} />
+                    <IdentifiedBadge traits={session.traits} userId={session.identified_user_id} />
                   )}
                 </div>
                 <div className="text-sm text-neutral-500 dark:text-neutral-400 flex items-center">
@@ -114,7 +114,8 @@ export function SessionInfoTab({
                 <div className="flex items-center gap-1 text-neutral-500 dark:text-neutral-400">
                   <CountryFlag country={sessionDetails.country} />
                   <span>{getCountryName(sessionDetails.country)}</span>
-                  {sessionDetails.region && (
+                  {/* The Region row below names the region; the raw code only stands in when it has no name. */}
+                  {sessionDetails.region && !getRegionName(sessionDetails.region) && (
                     <span>({sessionDetails.region})</span>
                   )}
                 </div>

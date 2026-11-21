@@ -1,31 +1,31 @@
+import type { AutocaptureTargetType } from "../../../lib/events";
 import { authedFetch } from "../../utils";
-import {
-  BucketedParams,
-  CommonApiParams,
-  PaginationParams,
-  SortParams,
-  toBucketedQueryParams,
-  toQueryParams,
-} from "./types";
-import type { GetSessionsResponse } from "./sessions";
+import { BucketedParams, CommonApiParams, PaginationParams, SortParams } from "./types";
+
+// Goal types: page paths, custom events, and autocaptured event types
+export type GoalType = "path" | "event" | AutocaptureTargetType;
+
+export interface GoalConfig {
+  pathPattern?: string;
+  eventName?: string;
+  // Optional wildcard pattern for autocapture goals (URL, button text, form name/id, copied text)
+  valuePattern?: string;
+  // Deprecated fields - kept for backwards compatibility
+  eventPropertyKey?: string;
+  eventPropertyValue?: string | number | boolean;
+  // New field for multiple property filters
+  propertyFilters?: Array<{
+    key: string;
+    value: string | number | boolean;
+  }>;
+}
 
 // Goal type
 export interface Goal {
   goalId: number;
   name: string | null;
-  goalType: "path" | "event";
-  config: {
-    pathPattern?: string;
-    eventName?: string;
-    // Deprecated fields - kept for backwards compatibility
-    eventPropertyKey?: string;
-    eventPropertyValue?: string | number | boolean;
-    // New field for multiple property filters
-    propertyFilters?: Array<{
-      key: string;
-      value: string | number | boolean;
-    }>;
-  };
+  goalType: GoalType;
+  config: GoalConfig;
   createdAt: string;
   total_conversions: number;
   total_sessions: number;
@@ -54,6 +54,33 @@ export interface GoalTimeSeriesPoint {
   conversion_rate: number;
 }
 
+/**
+ * Every goal of the site (up to the server's bound) with its conversions in
+ * the window, most conversions first, plus the totals the summary band shows.
+ */
+export interface GoalsSummary {
+  goals: Goal[];
+  total_sessions: number;
+  /** Sessions that completed at least one goal. */
+  converting_sessions: number;
+  /** Goals the site has; larger than `goals.length` when the bound was hit. */
+  total_goals: number;
+}
+
+/** A goal before it is saved: its type and what it matches. */
+export interface GoalDefinition {
+  goalType: GoalType;
+  config: GoalConfig;
+}
+
+/** What an unsaved goal would have counted in the window. */
+export interface GoalPreview {
+  conversions: number;
+  total_sessions: number;
+  conversion_rate: number;
+  series: { time: string; conversions: number }[];
+}
+
 export interface GoalsParams extends CommonApiParams, PaginationParams, SortParams {
   pageSize?: number;
   sort?: "goalId" | "name" | "goalType" | "createdAt";
@@ -70,77 +97,13 @@ export interface GoalSessionsParams extends CommonApiParams, PaginationParams {
 
 export interface CreateGoalParams {
   name?: string;
-  goalType: "path" | "event";
-  config: {
-    pathPattern?: string;
-    eventName?: string;
-    eventPropertyKey?: string;
-    eventPropertyValue?: string | number | boolean;
-    propertyFilters?: Array<{
-      key: string;
-      value: string | number | boolean;
-    }>;
-  };
+  goalType: GoalType;
+  config: GoalConfig;
 }
 
 export interface UpdateGoalParams extends CreateGoalParams {
   goalId: number;
   siteId: number;
-}
-
-/**
- * Fetch goals with pagination
- * GET /api/goals/:site
- */
-export async function fetchGoals(site: string | number, params: GoalsParams): Promise<GoalsResponse> {
-  const queryParams = {
-    ...toQueryParams(params),
-    page: params.page,
-    page_size: params.pageSize ?? params.limit,
-    sort: params.sort,
-    order: params.order,
-  };
-
-  const response = await authedFetch<GoalsResponse>(`/sites/${site}/goals`, queryParams);
-  return response;
-}
-
-/**
- * Fetch bucketed conversion data for goals
- * GET /api/goals/bucketed/:site
- */
-export async function fetchGoalTimeSeries(
-  site: string | number,
-  params: GoalTimeSeriesParams
-): Promise<GoalTimeSeriesPoint[]> {
-  const queryParams = {
-    ...toBucketedQueryParams(params),
-    goal_ids: params.goalIds,
-  };
-
-  const response = await authedFetch<{ data: GoalTimeSeriesPoint[] }>(`/sites/${site}/goals/bucketed`, queryParams);
-  return response.data;
-}
-
-/**
- * Fetch sessions that completed a goal
- * GET /api/goals/:goalId/sessions/:site
- */
-export async function fetchGoalSessions(
-  site: string | number,
-  params: GoalSessionsParams
-): Promise<{ data: GetSessionsResponse }> {
-  const queryParams = {
-    ...toQueryParams(params),
-    page: params.page,
-    limit: params.limit,
-  };
-
-  const response = await authedFetch<{ data: GetSessionsResponse }>(
-    `/sites/${site}/goals/${params.goalId}/sessions`,
-    queryParams
-  );
-  return response;
 }
 
 /**

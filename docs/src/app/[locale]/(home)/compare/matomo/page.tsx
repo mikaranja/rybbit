@@ -4,9 +4,9 @@ import type { Metadata } from "next";
 import { createOGImageUrl } from "@/lib/metadata";
 
 export const metadata: Metadata = {
-  title: "Rybbit vs Matomo: Modern Analytics Alternative",
+  title: "Rybbit vs Matomo: The Modern Matomo Alternative",
   description:
-    "Compare Rybbit and Matomo analytics. See how Rybbit offers simpler setup, modern UI, privacy by default, and zero maintenance vs Matomo's complex PHP-based system.",
+    "Looking for a Matomo alternative? Rybbit offers simpler setup, a modern UI, and privacy by default, with no PHP maintenance. See the full feature comparison.",
   openGraph: {
     title: "Rybbit vs Matomo: Which Analytics Platform is Right for You?",
     description: "Side-by-side comparison of Rybbit and Matomo. Modern, privacy-first analytics vs legacy PHP system.",
@@ -48,7 +48,7 @@ const structuredData = {
           name: "Is Rybbit really simpler than Matomo?",
           acceptedAnswer: {
             "@type": "Answer",
-            text: "Yes. Matomo has 70+ reports across 12 sections, inheriting Google Analytics-style complexity. Rybbit shows all essential metrics on a single intuitive dashboard. Your team can start using Rybbit immediately without training.",
+            text: "Yes. Matomo has 70+ reports across 12 sections, inheriting Google Analytics-style complexity. Rybbit shows all essential metrics on a single dashboard. Your team can start using Rybbit immediately without training.",
           },
         },
         {
@@ -80,7 +80,7 @@ const structuredData = {
           name: "Does Matomo have features Rybbit doesn't?",
           acceptedAnswer: {
             "@type": "Answer",
-            text: "Yes, Matomo offers heatmaps, A/B testing, form analytics, and a custom report builder that Rybbit doesn't have. However, many of these require paid plugins. Rybbit focuses on delivering the analytics features most teams actually need, with a much simpler experience.",
+            text: "Yes, Matomo offers heatmaps, A/B testing, form analytics, and a custom report builder that Rybbit doesn't have. However, many of these require paid plugins. Rybbit focuses on delivering the analytics features most teams need, with a much simpler experience.",
           },
         },
       ],
@@ -102,6 +102,8 @@ export default function Matomo() {
         chooseCompetitor={matomoExtendedData.chooseCompetitor}
         rybbitPricing={matomoExtendedData.rybbitPricing}
         competitorPricing={matomoExtendedData.competitorPricing}
+        deepDive={matomoExtendedData.deepDive}
+        otherAlternatives={matomoExtendedData.otherAlternatives}
         faqItems={matomoExtendedData.faqItems}
         relatedResources={matomoExtendedData.relatedResources}
       />

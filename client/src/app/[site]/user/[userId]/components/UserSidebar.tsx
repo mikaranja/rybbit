@@ -1,320 +1,336 @@
 "use client";
 
-import { useExtracted } from "next-intl";
-import { getTimezone } from "@/lib/store";
-import { Calendar, CalendarCheck, Clock, Files, Globe, Laptop, Monitor, Smartphone, Tablet } from "lucide-react";
+import { Bookmark, Pencil, Plus } from "lucide-react";
 import { DateTime } from "luxon";
-import { Avatar, generateName } from "../../../../../components/Avatar";
-import { Badge } from "../../../../../components/ui/badge";
-import { Skeleton } from "../../../../../components/ui/skeleton";
-import { IdentifiedBadge } from "../../../../../components/IdentifiedBadge";
+import { useExtracted } from "next-intl";
+import Link from "next/link";
+import { useState } from "react";
+import { UserInfo } from "../../../../../api/analytics/endpoints";
+import { useUserSegments } from "../../../../../api/analytics/hooks/useUserProfile";
+import { ChannelIcon, extractDomain, getDisplayName } from "../../../../../components/Channel";
+import { EditTraitsDialog } from "../../../../../components/EditTraitsDialog";
+import { Favicon } from "../../../../../components/Favicon";
+import { Button } from "../../../../../components/ui/button";
+import { Card } from "../../../../../components/ui/card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../../../../components/ui/tooltip";
 import { useDateTimeFormat } from "../../../../../hooks/useDateTimeFormat";
-import { formatDuration } from "../../../../../lib/dateTimeUtils";
-import { getCountryName, getLanguageName } from "../../../../../lib/utils";
-import { Browser } from "../../../components/shared/icons/Browser";
-import { CountryFlag } from "../../../components/shared/icons/CountryFlag";
-import { OperatingSystem } from "../../../components/shared/icons/OperatingSystem";
-import { VisitCalendar } from "./Calendar";
-import { EventIcon, PageviewIcon } from "../../../../../components/EventIcons";
-import { UserInfo, UserSessionCountResponse } from "../../../../../api/analytics/endpoints";
-import { DeviceIcon } from "../../../components/shared/icons/Device";
+import { useCanOnSite } from "../../../../../hooks/usePermissions";
 import { useConfigs } from "../../../../../lib/configs";
+import { canPivot } from "../../../../../lib/pivots";
+import { useTimezone } from "../../../../../lib/store";
+import { PerformanceMetric } from "../../../performance/performanceStore";
+import {
+  formatMetricValue,
+  getMetricColor,
+  getMetricUnit,
+  METRIC_LABELS,
+  METRIC_LABELS_SHORT,
+} from "../../../performance/utils/performanceUtils";
+import { LocationDevices } from "./LocationDevices";
+import { useProfileHref, userFilter } from "./profileLinks";
+import { InfoRow, InfoRowSkeleton, SidebarHeader, SidebarHint, SidebarSection } from "./SidebarPrimitives";
 import { UserLocationMap } from "./UserLocationMap";
+import { customTraits, traitLabel, traitText } from "./userTraits";
 
 interface UserSidebarProps {
+  /** The identity the profile's panels query: the identified id when there is one. */
+  userId: string;
   data: UserInfo | undefined;
   isLoading: boolean;
-  sessionCount: UserSessionCountResponse[];
+  /**
+   * The user's first day on the site, read on its own so first-touch facts do
+   * not move with the date range. Undefined while it loads, and for a user the
+   * page's filters leave with no sessions at all.
+   */
+  firstTouch: UserInfo | undefined;
+  isLoadingFirstTouch: boolean;
   getRegionName: (region: string) => string;
 }
 
-// Reusable card wrapper for sidebar sections
-function SidebarCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return (
-    <div
-      className={`bg-white dark:bg-neutral-900 rounded-lg border border-neutral-100 dark:border-neutral-850 p-4 ${className}`}
-    >
-      {children}
-    </div>
-  );
-}
+const VITALS_ORDER: PerformanceMetric[] = ["lcp", "cls", "inp", "fcp", "ttfb"];
 
-// Info row component for consistent styling
-function InfoRow({ icon, label, value }: { icon?: React.ReactNode; label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between py-1.5 border-b border-neutral-50 dark:border-neutral-850 last:border-0 text-xs">
-      <span className="text-neutral-500 dark:text-neutral-400">{label}</span>
-      <span className="text-neutral-700 dark:text-neutral-200 flex items-center gap-1.5">
-        {icon}
-        {value}
-      </span>
-    </div>
-  );
-}
+// Postgres hands timestamps back as "2026-08-14 10:02:11.123"; an API in
+// front of it may hand back ISO. Both are UTC.
+const parseUtc = (value: string | undefined) => {
+  if (!value) return null;
+  const sql = DateTime.fromSQL(value, { zone: "utc" });
+  const parsed = sql.isValid ? sql : DateTime.fromISO(value, { zone: "utc" });
+  // Empty ranges come back as epoch-zero timestamps; treat them as absent
+  return parsed.isValid && parsed.year > 1970 ? parsed : null;
+};
 
-// Stat card component
-function StatCard({
-  icon,
-  label,
-  value,
+/**
+ * The rail: everything the page knows about who this is, as one ledger.
+ * Traits lead because they are what the site itself said about the person;
+ * what Rybbit observed follows.
+ */
+export function UserSidebar({
+  userId,
+  data,
   isLoading,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: React.ReactNode;
-  isLoading: boolean;
-}) {
-  if (isLoading) {
-    return (
-      <div className="flex flex-col gap-0.5">
-        <div className="text-[10px] text-neutral-500 dark:text-neutral-400 flex items-center gap-1 uppercase tracking-wide">
-          <Skeleton className="w-3 h-3 rounded" />
-          <Skeleton className="h-2.5 w-14 rounded" />
-        </div>
-        <Skeleton className="h-4 w-16 rounded" />
-      </div>
-    );
-  }
-  return (
-    <div className="flex flex-col gap-0.5">
-      <div className="text-[10px] text-neutral-500 dark:text-neutral-400 flex items-center gap-1 uppercase tracking-wide">
-        {icon}
-        {label}
-      </div>
-      <div className="text-sm">{value}</div>
-    </div>
-  );
-}
-
-export function UserSidebar({ data, isLoading, sessionCount, getRegionName }: UserSidebarProps) {
+  firstTouch,
+  isLoadingFirstTouch,
+  getRegionName,
+}: UserSidebarProps) {
   const t = useExtracted();
-  const { formatRelative } = useDateTimeFormat();
+  const zone = useTimezone();
   const { configs } = useConfigs();
-  const isIdentified = !!data?.identified_user_id;
+  const { formatDateTime, formatRelative } = useDateTimeFormat();
+  const profileHref = useProfileHref();
+  const canEditTraits = useCanOnSite("users:write");
+  const [traitsOpen, setTraitsOpen] = useState(false);
+  const { data: segmentData } = useUserSegments(userId);
 
-  // Filter custom traits (exclude username, name, email)
-  const customTraits = data?.traits
-    ? Object.entries(data.traits).filter(([key]) => !["username", "name", "email"].includes(key))
-    : [];
+  const isIdentified = !!data?.identified_user_id;
+  const traits = customTraits(data?.traits);
+  const showTraits = isIdentified && !!data && (traits.length > 0 || canEditTraits);
+
+  const segments = segmentData?.segments ?? [];
+
+  // First-touch facts come from the user's first day; the selected period's
+  // own first session stands in only when there is no first day to read.
+  const acquisition = firstTouch ?? data;
+  const isLoadingAcquisition = isLoading || isLoadingFirstTouch;
+  const firstReferrerDomain = acquisition?.first_referrer ? extractDomain(acquisition.first_referrer) : null;
+  const latestChannel = data?.last_channel;
+  const channelChanged = !!latestChannel && !!acquisition && latestChannel !== acquisition.first_channel;
+  const firstSeen = parseUtc(firstTouch?.first_seen)?.setZone(zone) ?? null;
+
+  const vitals = data?.vitals ?? null;
+  const vitalsToShow = vitals ? VITALS_ORDER.filter(metric => vitals[`${metric}_p75`] != null) : [];
+  const showMap = !!configs?.mapboxToken && !!data?.country;
+
+  const truncated = (value: string) => (
+    <span className="inline-block max-w-[170px] truncate align-bottom" title={value}>
+      {value}
+    </span>
+  );
 
   return (
-    <div className="w-full lg:w-[300px] md:shrink-0 space-y-3">
-      {/* Stats Grid */}
-      <SidebarCard>
-        <div className="grid grid-cols-2 gap-4">
-          <StatCard
-            icon={<Files className="w-3 h-3" />}
-            label={t("Sessions")}
-            value={data?.sessions ?? "—"}
-            isLoading={isLoading}
-          />
-          <StatCard
-            icon={<PageviewIcon className="w-3 h-3" />}
-            label={t("Pageviews")}
-            value={data?.pageviews ?? "—"}
-            isLoading={isLoading}
-          />
-          <StatCard
-            icon={<EventIcon className="w-3 h-3" />}
-            label={t("Events")}
-            value={data?.events ?? "—"}
-            isLoading={isLoading}
-          />
-          <StatCard
-            icon={<Clock className="w-3 h-3" />}
-            label={t("Avg Duration")}
-            value={data?.duration ? formatDuration(data.duration) : "—"}
-            isLoading={isLoading}
-          />
-          <StatCard
-            icon={<Calendar className="w-3 h-3" />}
-            label={t("First Seen")}
-            value={
-              data?.first_seen
-                ? DateTime.fromSQL(data.first_seen, { zone: "utc" }).setZone(getTimezone()).toLocaleString(DateTime.DATE_MED)
-                : "—"
-            }
-            isLoading={isLoading}
-          />
-          <StatCard
-            icon={<CalendarCheck className="w-3 h-3" />}
-            label={t("Last Seen")}
-            value={
-              data?.last_seen
-                ? DateTime.fromSQL(data.last_seen, { zone: "utc" }).setZone(getTimezone()).toLocaleString(DateTime.DATE_MED)
-                : "—"
-            }
-            isLoading={isLoading}
-          />
-        </div>
-      </SidebarCard>
-
-      {/* Location & Device Info */}
-      <SidebarCard>
-        <h3 className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-2">
-          {t("Location & Device")}
-        </h3>
-        {isLoading ? (
-          <div className="space-y-0">
-            {/* Country */}
-            <div className="flex items-center justify-between py-1.5 border-b border-neutral-50 dark:border-neutral-850">
-              <Skeleton className="h-3 w-14 rounded" />
-              <div className="flex items-center gap-1.5">
-                <Skeleton className="w-4 h-4 rounded" />
-                <Skeleton className="h-3 w-24 rounded" />
-              </div>
-            </div>
-            {/* Region */}
-            <div className="flex items-center justify-between py-1.5 border-b border-neutral-50 dark:border-neutral-850">
-              <Skeleton className="h-3 w-12 rounded" />
-              <Skeleton className="h-3 w-32 rounded" />
-            </div>
-            {/* Language */}
-            <div className="flex items-center justify-between py-1.5 border-b border-neutral-50 dark:border-neutral-850">
-              <Skeleton className="h-3 w-16 rounded" />
-              <Skeleton className="h-3 w-20 rounded" />
-            </div>
-            {/* Device */}
-            <div className="flex items-center justify-between py-1.5 border-b border-neutral-50 dark:border-neutral-850">
-              <Skeleton className="h-3 w-12 rounded" />
-              <div className="flex items-center gap-1.5">
-                <Skeleton className="w-4 h-4 rounded" />
-                <Skeleton className="h-3 w-14 rounded" />
-              </div>
-            </div>
-            {/* Browser */}
-            <div className="flex items-center justify-between py-1.5 border-b border-neutral-50 dark:border-neutral-850">
-              <Skeleton className="h-3 w-14 rounded" />
-              <div className="flex items-center gap-1.5">
-                <Skeleton className="w-4 h-4 rounded" />
-                <Skeleton className="h-3 w-20 rounded" />
-              </div>
-            </div>
-            {/* OS */}
-            <div className="flex items-center justify-between py-1.5 border-b border-neutral-50 dark:border-neutral-850">
-              <Skeleton className="h-3 w-8 rounded" />
-              <div className="flex items-center gap-1.5">
-                <Skeleton className="w-4 h-4 rounded" />
-                <Skeleton className="h-3 w-24 rounded" />
-              </div>
-            </div>
-            {/* Screen */}
-            <div className="flex items-center justify-between py-1.5">
-              <Skeleton className="h-3 w-12 rounded" />
-              <Skeleton className="h-3 w-16 rounded" />
-            </div>
-          </div>
-        ) : (
-          <div>
-            <InfoRow
-              icon={<CountryFlag country={data?.country || ""} className="w-4 h-4" />}
-              label={t("Country")}
-              value={data?.country ? getCountryName(data.country) : "—"}
-            />
-            <InfoRow
-              label={t("Region")}
-              value={
-                <span className="truncate max-w-[160px] inline-block">
-                  {data?.region ? getRegionName(data.region) : "—"}
-                  {data?.city && `, ${data.city}`}
-                </span>
+    <Card className="w-full self-start lg:w-[300px] lg:shrink-0">
+      <div className="divide-y divide-neutral-100 dark:divide-neutral-850">
+        {/* Traits (identified users only) */}
+        {showTraits && (
+          <SidebarSection>
+            <SidebarHeader
+              title={t("Traits")}
+              right={
+                canEditTraits ? (
+                  <Button
+                    variant="ghost"
+                    size="smIcon"
+                    className="-my-1.5 -mr-1.5 h-6 w-6 text-neutral-500 dark:text-neutral-400"
+                    aria-label={t("Edit traits")}
+                    onClick={() => setTraitsOpen(true)}
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </Button>
+                ) : undefined
               }
             />
-            <InfoRow label={t("Language")} value={data?.language ? getLanguageName(data.language) : "—"} />
-            <InfoRow
-              icon={
-                <DeviceIcon deviceType={data?.device_type || ""} size={13} />
-              }
-              label={t("Device")}
-              value={data?.device_type ?? "—"}
+            {traits.length > 0 ? (
+              <div>
+                {traits.map(([key, value]) => (
+                  <InfoRow
+                    key={key}
+                    label={<span className="capitalize">{traitLabel(key)}</span>}
+                    value={truncated(traitText(value))}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">{t("No traits yet")}</p>
+            )}
+            {canEditTraits && (
+              <button
+                type="button"
+                onClick={() => setTraitsOpen(true)}
+                className="mt-1.5 inline-flex items-center gap-1 rounded-sm text-xs text-neutral-500 hover:text-neutral-800 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 dark:text-neutral-400 dark:hover:text-neutral-200"
+              >
+                <Plus className="h-3 w-3" />
+                {t("Add trait")}
+              </button>
+            )}
+            <EditTraitsDialog
+              userId={data.identified_user_id}
+              traits={data.traits}
+              open={traitsOpen}
+              onOpenChange={setTraitsOpen}
             />
-            <InfoRow
-              icon={<Browser browser={data?.browser || "Unknown"} size={13} />}
-              label={t("Browser")}
-              value={data?.browser ? `${data.browser}${data.browser_version ? ` v${data.browser_version}` : ""}` : "—"}
-            />
-            <InfoRow
-              icon={<OperatingSystem os={data?.operating_system || ""} size={13} />}
-              label={t("OS")}
-              value={
-                data?.operating_system
-                  ? `${data.operating_system}${data.operating_system_version ? ` v${data.operating_system_version}` : ""}`
-                  : "—"
-              }
-            />
-            <InfoRow
-              label={t("Screen")}
-              value={data?.screen_width && data?.screen_height ? `${data.screen_width}×${data.screen_height}` : "—"}
-            />
-          </div>
+          </SidebarSection>
         )}
-      </SidebarCard>
 
-      {/* Activity Calendar */}
-      <SidebarCard className="h-[180px]">
-        <h3 className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-2">
-          {t("Activity Calendar")}
-        </h3>
-        <div className="h-[140px]">
-          <VisitCalendar sessionCount={sessionCount} />
-        </div>
-      </SidebarCard>
+        {/* Saved segments this user's sessions fall into */}
+        {segments.length > 0 && segmentData && (
+          <SidebarSection>
+            <SidebarHeader title={t("Segments")} right={<SidebarHint>{t("Sessions in range")}</SidebarHint>} />
+            <div>
+              {segments.map(segment => {
+                const filters = [...segment.filters, userFilter(userId)];
+                const name = (
+                  <>
+                    <Bookmark className="h-3.5 w-3.5 shrink-0 text-neutral-400 dark:text-neutral-500" />
+                    <span className="truncate">{segment.name}</span>
+                  </>
+                );
+                return (
+                  <InfoRow
+                    key={segment.segmentId}
+                    label={
+                      // Offered only when the Sessions list honours every one of the segment's filters.
+                      canPivot("sessions", filters) ? (
+                        <Link
+                          href={profileHref("sessions", filters)}
+                          prefetch={false}
+                          title={t("Open these sessions")}
+                          className="inline-flex max-w-[170px] items-center gap-1.5 rounded-sm text-neutral-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400 dark:text-neutral-200"
+                        >
+                          {name}
+                        </Link>
+                      ) : (
+                        <span className="inline-flex max-w-[170px] items-center gap-1.5 text-neutral-700 dark:text-neutral-200">
+                          {name}
+                        </span>
+                      )
+                    }
+                    value={
+                      <>
+                        <span className="tabular-nums">{segment.sessions.toLocaleString()}</span>
+                        <span className="tabular-nums text-neutral-500 dark:text-neutral-400">
+                          {t("of {total}", { total: segmentData.total_sessions.toLocaleString() })}
+                        </span>
+                      </>
+                    }
+                  />
+                );
+              })}
+            </div>
+            {segmentData.truncated && (
+              <p className="mt-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                {t("Only the first segments by name are checked.")}
+              </p>
+            )}
+          </SidebarSection>
+        )}
 
-      {/* User Traits (identified users only) */}
-      {isIdentified && customTraits.length > 0 && (
-        <SidebarCard>
-          <h3 className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-2">
-            {t("User Traits")}
-          </h3>
-          <div className="space-y-1">
-            {customTraits.map(([key, value]) => (
-              <div
-                key={key}
-                className="flex items-center justify-between py-1 border-b border-neutral-50 dark:border-neutral-850 last:border-0 text-xs"
-              >
-                <span className="text-neutral-500 dark:text-neutral-400 capitalize">{key.replace(/_/g, " ")}</span>
-                <span className="text-neutral-700 dark:text-neutral-200 truncate max-w-[160px]">{String(value)}</span>
-              </div>
-            ))}
-          </div>
-        </SidebarCard>
-      )}
+        {/* Acquisition (first-touch attribution) */}
+        <SidebarSection>
+          <SidebarHeader title={t("Acquisition")} right={<SidebarHint>{t("First touch")}</SidebarHint>} />
+          {isLoadingAcquisition ? (
+            <div>
+              <InfoRowSkeleton labelWidth="w-14" valueWidth="w-24" withIcon />
+              <InfoRowSkeleton labelWidth="w-12" valueWidth="w-20" withIcon />
+              <InfoRowSkeleton labelWidth="w-16" valueWidth="w-28" />
+              <InfoRowSkeleton labelWidth="w-14" valueWidth="w-32" />
+            </div>
+          ) : (
+            <div>
+              <InfoRow
+                icon={
+                  acquisition?.first_channel ? (
+                    <ChannelIcon channel={acquisition.first_channel} className="w-3.5 h-3.5" />
+                  ) : undefined
+                }
+                label={t("Channel")}
+                value={acquisition?.first_channel || "—"}
+              />
+              <InfoRow
+                icon={
+                  firstReferrerDomain ? <Favicon domain={firstReferrerDomain} className="w-3.5 h-3.5" /> : undefined
+                }
+                label={t("Referrer")}
+                value={firstReferrerDomain ? getDisplayName(firstReferrerDomain) : "—"}
+              />
+              <InfoRow
+                label={t("Landing page")}
+                value={acquisition?.first_entry_page ? truncated(acquisition.first_entry_page) : "—"}
+              />
+              {acquisition?.first_utm_source && (
+                <InfoRow label={t("Source")} value={truncated(acquisition.first_utm_source)} />
+              )}
+              {acquisition?.first_utm_medium && (
+                <InfoRow label={t("Medium")} value={truncated(acquisition.first_utm_medium)} />
+              )}
+              {acquisition?.first_utm_campaign && (
+                <InfoRow label={t("Campaign")} value={truncated(acquisition.first_utm_campaign)} />
+              )}
+              {channelChanged && (
+                <InfoRow
+                  icon={<ChannelIcon channel={latestChannel} className="w-3.5 h-3.5" />}
+                  label={t("Latest channel")}
+                  value={latestChannel}
+                />
+              )}
+              {firstSeen && (
+                <InfoRow
+                  label={t("First seen")}
+                  value={
+                    <span
+                      className="whitespace-nowrap"
+                      title={formatDateTime(firstSeen, {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                        timeZone: zone,
+                      })}
+                    >
+                      {formatDateTime(firstSeen, { year: "numeric", month: "short", day: "numeric", timeZone: zone })}
+                      <span className="text-neutral-500 dark:text-neutral-400"> · {formatRelative(firstSeen)}</span>
+                    </span>
+                  }
+                />
+              )}
+            </div>
+          )}
+        </SidebarSection>
 
-      {/* Location Map */}
-      {configs?.mapboxToken && data?.country && (
-        <div className="bg-white dark:bg-neutral-900 rounded-lg border border-neutral-100 dark:border-neutral-850 aspect-square overflow-hidden">
-          <UserLocationMap
-            country={data.country}
-            region={data.region}
-            city={data.city}
-          />
-        </div>
-      )}
+        {/* Location & device */}
+        <SidebarSection>
+          <SidebarHeader title={t("Location & device")} />
+          {showMap && data && !isLoading && (
+            <UserLocationMap
+              country={data.country}
+              region={getRegionName(data.region)}
+              city={data.city}
+              className="mb-3 h-[132px]"
+            />
+          )}
+          <LocationDevices data={data} isLoading={isLoading} getRegionName={getRegionName} />
+        </SidebarSection>
 
-      {/* Linked Devices (identified users only) */}
-      {/* {isIdentified && data?.linked_devices && data.linked_devices.length > 0 && (
-        <SidebarCard>
-          <h3 className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-2 flex items-center gap-1.5">
-            <Laptop className="w-3 h-3" />
-            Linked Devices ({data.linked_devices.length})
-          </h3>
-          <div className="space-y-1 max-h-32 overflow-y-auto">
-            {data.linked_devices.map(device => (
-              <div
-                key={device.anonymous_id}
-                className="flex items-center justify-between py-1 border-b border-neutral-50 dark:border-neutral-850 last:border-0"
-              >
-                <span className="text-neutral-600 dark:text-neutral-300 font-mono text-xs truncate max-w-[140px]">
-                  {device.anonymous_id}
-                </span>
-                <span className="text-neutral-400 dark:text-neutral-500 text-xs">
-                  {formatRelative(DateTime.fromISO(device.created_at))}
-                </span>
-              </div>
-            ))}
-          </div>
-        </SidebarCard>
-      )} */}
-    </div>
+        {/* Web vitals (p75 across this user's performance events) */}
+        {vitals && vitalsToShow.length > 0 && (
+          <SidebarSection>
+            <SidebarHeader title={t("Web vitals")} right={<SidebarHint>p75</SidebarHint>} />
+            <div>
+              {vitalsToShow.map(metric => {
+                const value = vitals[`${metric}_p75`] as number;
+                return (
+                  <InfoRow
+                    key={metric}
+                    label={
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="cursor-default">{METRIC_LABELS_SHORT[metric]}</span>
+                        </TooltipTrigger>
+                        <TooltipContent>{METRIC_LABELS[metric]}</TooltipContent>
+                      </Tooltip>
+                    }
+                    value={
+                      <span className={`tabular-nums ${getMetricColor(metric, value)}`}>
+                        {formatMetricValue(metric, value)}
+                        {getMetricUnit(metric, value)}
+                      </span>
+                    }
+                  />
+                );
+              })}
+            </div>
+          </SidebarSection>
+        )}
+      </div>
+    </Card>
   );
 }

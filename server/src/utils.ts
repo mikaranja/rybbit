@@ -1,13 +1,12 @@
-import { eq } from "drizzle-orm";
 import { FastifyRequest } from "fastify";
 import * as psl from "psl";
-import { db } from "./db/postgres/postgres.js";
-import { sites } from "./db/postgres/schema.js";
 
 const desktopOS = new Set([
   "AIX",
+  "Amiga OS",
   "macOS",
   "Windows",
+  "Windows RT",
   "Linux",
   "FreeBSD",
   "OpenBSD",
@@ -92,13 +91,32 @@ const tvOS = new Set([
   "Chromecast Linux",
   "Chromecast SmartSpeaker",
   "NetTV",
+  "Vega OS",
 ]);
 
 const gamingOS = new Set(["PlayStation", "Xbox", "Nintendo"]);
 
 const embeddedOS = new Set(["Windows IoT", "Contiki", "Raspbian", "Morph OS", "Pico", "NetRange"]);
 
+// ua-parser's own device classification. It is the only signal that tells a
+// tablet or TV apart from a phone running the same OS (Android, Tizen), so it
+// is consulted before the OS lists below.
+const uaDeviceTypes: Record<string, string> = {
+  mobile: "Mobile",
+  tablet: "Tablet",
+  smarttv: "TV",
+  console: "Console",
+  wearable: "Wearable",
+  xr: "XR",
+  embedded: "Embedded",
+};
+
 export function getDeviceType(screenWidth: number, screenHeight: number, ua: UAParser.IResult): string {
+  const uaDeviceType = ua.device.type ? uaDeviceTypes[ua.device.type] : undefined;
+  if (uaDeviceType) {
+    return uaDeviceType;
+  }
+
   if (ua.os.name) {
     if (desktopOS.has(ua.os.name)) {
       return "Desktop";
@@ -117,7 +135,7 @@ export function getDeviceType(screenWidth: number, screenHeight: number, ua: UAP
   const smallerDimension = Math.min(screenWidth, screenHeight);
   if (largerDimension > 1024) {
     return "Desktop";
-  } else if (largerDimension > 768 && smallerDimension > 1024) {
+  } else if (smallerDimension >= 600) {
     return "Tablet";
   }
   return "Mobile";
@@ -136,38 +154,6 @@ export const extractSiteId = (path: string) => {
   if (segments.length >= 2) {
     return segments[segments.length - 1];
   }
-  return null;
-};
-
-// Cache for string ID to numeric ID lookups to avoid repeated DB queries
-const siteIdCache = new Map<string, number>();
-
-// Resolve a site identifier (string ID or numeric ID) to its numeric siteId
-// Returns the numeric siteId or null if not found
-export const resolveNumericSiteId = async (siteIdentifier: string): Promise<number | null> => {
-  // Check cache first
-  if (siteIdCache.has(siteIdentifier)) {
-    return siteIdCache.get(siteIdentifier)!;
-  }
-
-  // Look up the string ID in the database
-  try {
-    const site = await db.select({ siteId: sites.siteId }).from(sites).where(eq(sites.id, siteIdentifier)).limit(1);
-
-    if (site.length > 0) {
-      const numericId = site[0].siteId;
-      // Cache the result
-      siteIdCache.set(siteIdentifier, numericId);
-      return numericId;
-    }
-  } catch (error) {
-    console.error("Error resolving site ID:", error);
-  }
-
-  if (/^\d+$/.test(siteIdentifier)) {
-    return parseInt(siteIdentifier, 10);
-  }
-
   return null;
 };
 
@@ -238,22 +224,35 @@ export const normalizeOrigin = (input: string): string => {
 };
 
 // Helper function to get IP address
+//
+// NOTE: production request paths resolve client IPs via `resolveClientIp()`
+// (resolveClientIp.ts), which wraps this with ASN-based proxy detection. This
+// function is the simple header-precedence primitive it falls back to when no
+// Cloudflare edge is present, and remains the building block for that decision.
+//
+// Header precedence is tuned for first-party proxies (Cloudflare Workers, AWS
+// CloudFront, Fastly, nginx, ...) that front Rybbit and forward the original
+// visitor IP. The hard constraint: when such a proxy sits in front of our
+// Cloudflare edge, `CF-Connecting-IP` is the *proxy's* egress IP, not the
+// visitor — so it must rank BELOW the forwarded headers, otherwise proxied
+// traffic geolocates to the proxy's exit node. (CloudFront, for one, cannot
+// forward `X-Real-IP` at all — it's on AWS's origin custom-header denylist —
+// so `X-Forwarded-For` is the only channel many proxies have.)
+//
+// For the non-proxied path these forwarded headers are client-spoofable, which
+// only lets a visitor corrupt their own (anonymous) geo — acceptable. See
+// resolveClientIp.ts for the ASN-aware variant that removes even that exposure.
 export const getIpAddress = (request: FastifyRequest): string => {
-  // Priority 1: X-Real-IP. First-party proxies can set this to the original
-  // visitor IP even when our Cloudflare edge sees the proxy's egress IP.
+  // Priority 1: X-Real-IP. First-party proxies (e.g. nginx, Cloudflare Workers)
+  // set this to the single original visitor IP.
   const realIp = request.headers["x-real-ip"];
   if (realIp && typeof realIp === "string") {
     return realIp.trim();
   }
 
-  // Priority 2: Cloudflare header. In our Cloudflare-fronted direct path this
-  // is authoritative; X-Forwarded-For may contain intermediary edge IPs.
-  const cfConnectingIp = request.headers["cf-connecting-ip"];
-  if (cfConnectingIp && typeof cfConnectingIp === "string") {
-    return cfConnectingIp.trim();
-  }
-
-  // Priority 3: X-Forwarded-For - use the first IP, which should be the original client.
+  // Priority 2: X-Forwarded-For - use the first IP, which should be the original
+  // client. Ranks above CF-Connecting-IP so proxied traffic is attributed to the
+  // visitor rather than the proxy's edge node.
   const forwardedFor = request.headers["x-forwarded-for"];
   if (forwardedFor && typeof forwardedFor === "string") {
     const ips = forwardedFor
@@ -265,5 +264,22 @@ export const getIpAddress = (request: FastifyRequest): string => {
     }
   }
 
+  // Priority 3: Cloudflare header. Authoritative on the direct Cloudflare-fronted
+  // path; only reached when no forwarded header is present.
+  const cfConnectingIp = request.headers["cf-connecting-ip"];
+  if (cfConnectingIp && typeof cfConnectingIp === "string") {
+    return cfConnectingIp.trim();
+  }
+
   return request.ip;
+};
+
+// The request's user agent as a single string. Node exposes a repeated header as
+// an array; take the first rather than the joined form so parsing sees one UA.
+export const getRequestUserAgent = (headers: FastifyRequest["headers"]): string => {
+  const userAgentHeader = headers["user-agent"];
+  if (Array.isArray(userAgentHeader)) {
+    return userAgentHeader[0] || "";
+  }
+  return userAgentHeader || "";
 };

@@ -1,13 +1,23 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 const corsMethods = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"];
-const corsAllowedHeaders = ["Content-Type", "Authorization", "X-Requested-With", "x-captcha-response", "x-private-key"];
+const corsAllowedHeaders = [
+  "Content-Type",
+  "Authorization",
+  "X-Requested-With",
+  "x-captcha-response",
+  "x-private-key",
+  "MCP-Protocol-Version",
+  "MCP-Session-Id",
+  "Last-Event-ID",
+];
 
 type CorsOptions = {
   origin: boolean;
   methods: string[];
   allowedHeaders: string[];
   credentials: boolean;
+  maxAge?: number;
 };
 
 type CorsDelegateCallback = (error: Error | null, options?: CorsOptions) => void;
@@ -16,6 +26,10 @@ const commonCorsOptions = {
   methods: corsMethods,
   allowedHeaders: corsAllowedHeaders,
 };
+
+// Chromium caps Access-Control-Max-Age at 2 hours; without the header it caches a
+// preflight for only 5 seconds, so nearly every tracker POST paid for an OPTIONS.
+export const TRACKER_PREFLIGHT_MAX_AGE_SECONDS = 7200;
 
 const devTrustedOrigins = ["http://localhost:3002", "http://127.0.0.1:3002"];
 const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -84,6 +98,10 @@ export function isPublicCorsPath(path: string): boolean {
     path === "/api/track" ||
     path === "/api/identify" ||
     path === "/api/version" ||
+    // OAuth/OIDC discovery documents (RFC 8414/9728) are public metadata that
+    // browser-based MCP clients fetch cross-origin.
+    path.startsWith("/.well-known/oauth-") ||
+    path.startsWith("/.well-known/openid-configuration") ||
     path.startsWith("/api/session-replay/record/") ||
     path.startsWith("/api/site/tracking-config/") ||
     /^\/api\/sites\/[^/]+\/sessions$/.test(path) ||
@@ -92,10 +110,20 @@ export function isPublicCorsPath(path: string): boolean {
   );
 }
 
-export function getCorsOptionsForRequest(
-  request: FastifyRequest,
-  env: NodeJS.ProcessEnv = process.env
-): CorsOptions {
+// Endpoints the tracking script calls from customer pages. Their CORS policy
+// depends only on the origin, so browsers may cache the preflight. Dashboard
+// routes keep the default so a policy change reaches them immediately.
+export function isTrackerCorsPath(path: string): boolean {
+  return (
+    path === "/api/track" ||
+    path === "/api/identify" ||
+    path.startsWith("/api/session-replay/record/") ||
+    path.startsWith("/api/site/tracking-config/") ||
+    /^\/api\/site\/[^/]+\/feature-flags\/evaluate$/.test(path)
+  );
+}
+
+export function getCorsOptionsForRequest(request: FastifyRequest, env: NodeJS.ProcessEnv = process.env): CorsOptions {
   const requestOrigin = normalizeCorsOrigin(request.headers.origin);
   if (!requestOrigin) {
     return {
@@ -105,11 +133,18 @@ export function getCorsOptionsForRequest(
     };
   }
 
-  if (isPublicCorsPath(getRequestPath(request))) {
+  const path = getRequestPath(request);
+  if (isPublicCorsPath(path)) {
+    // These paths are reachable from any origin (e.g. embedded widgets), but they
+    // are also hit by the authenticated dashboard, which sends cookies. Reflect any
+    // origin, but only allow credentials for trusted origins so the dashboard's
+    // credentialed requests get `Access-Control-Allow-Credentials: true` while
+    // arbitrary embed origins stay credential-less.
     return {
       ...commonCorsOptions,
       origin: true,
-      credentials: false,
+      credentials: getTrustedCorsOrigins(env).includes(requestOrigin),
+      ...(isTrackerCorsPath(path) ? { maxAge: TRACKER_PREFLIGHT_MAX_AGE_SECONDS } : {}),
     };
   }
 
@@ -120,17 +155,19 @@ export function getCorsOptionsForRequest(
   };
 }
 
-export function shouldRejectUntrustedOrigin(
-  request: FastifyRequest,
-  env: NodeJS.ProcessEnv = process.env
-): boolean {
+export function shouldRejectUntrustedOrigin(request: FastifyRequest, env: NodeJS.ProcessEnv = process.env): boolean {
   if (!unsafeMethods.has(request.method)) {
     return false;
   }
 
-  const requestOrigin = normalizeCorsOrigin(request.headers.origin);
-  if (!requestOrigin || isPublicCorsPath(getRequestPath(request))) {
+  const path = getRequestPath(request);
+  if (request.headers.origin === undefined || isPublicCorsPath(path)) {
     return false;
+  }
+
+  const requestOrigin = normalizeCorsOrigin(request.headers.origin);
+  if (!requestOrigin) {
+    return true;
   }
 
   return !getTrustedCorsOrigins(env).includes(requestOrigin);

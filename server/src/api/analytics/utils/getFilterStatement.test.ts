@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getFilterStatement, getSqlParam } from "./getFilterStatement.js";
+import { filterParamError, getFilterStatement, getSqlParam } from "./getFilterStatement.js";
 import { FilterParameter } from "../types.js";
 
 describe("getSqlParam", () => {
@@ -49,13 +49,13 @@ describe("getSqlParam", () => {
 
     it("should handle entry_page", () => {
       expect(getSqlParam("entry_page")).toBe(
-        "(SELECT argMin(pathname, timestamp) FROM events WHERE session_id = events.session_id)"
+        "(SELECT argMinIf(pathname, timestamp_ms, type = 'pageview') FROM events WHERE session_id = events.session_id)"
       );
     });
 
     it("should handle exit_page", () => {
       expect(getSqlParam("exit_page")).toBe(
-        "(SELECT argMax(pathname, timestamp) FROM events WHERE session_id = events.session_id)"
+        "(SELECT argMaxIf(pathname, timestamp_ms, type = 'pageview') FROM events WHERE session_id = events.session_id)"
       );
     });
 
@@ -75,24 +75,6 @@ describe("getSqlParam", () => {
       const result = getSqlParam("operating_system_version");
       expect(result).toContain("CASE");
       expect(result).toContain("Windows 10/11");
-    });
-  });
-
-  describe("Standard parameters", () => {
-    it("should return browser as-is", () => {
-      expect(getSqlParam("browser")).toBe("browser");
-    });
-
-    it("should return country as-is", () => {
-      expect(getSqlParam("country")).toBe("country");
-    });
-
-    it("should return pathname as-is", () => {
-      expect(getSqlParam("pathname")).toBe("pathname");
-    });
-
-    it("should return device_type as-is", () => {
-      expect(getSqlParam("device_type")).toBe("device_type");
     });
   });
 });
@@ -142,10 +124,10 @@ describe("getFilterStatement", () => {
       expect(result).toBe("AND browser != 'Chrome'");
     });
 
-    it("should handle multiple not_equals values", () => {
+    it("should handle multiple not_equals values with NOT IN semantics", () => {
       const filters = JSON.stringify([{ parameter: "browser", type: "not_equals", value: ["Chrome", "Firefox"] }]);
       const result = getFilterStatement(filters);
-      expect(result).toBe("AND (browser != 'Chrome' OR browser != 'Firefox')");
+      expect(result).toBe("AND (browser != 'Chrome' AND browser != 'Firefox')");
     });
   });
 
@@ -232,31 +214,38 @@ describe("getFilterStatement", () => {
   });
 
   describe("User ID special handling", () => {
-    it("should check both user_id and identified_user_id for equals", () => {
+    // A filter value can be either a custom user ID or an anonymous fingerprint.
+    // The fingerprint branch is guarded on identified_user_id = '' so that filtering
+    // by a fingerprint shared behind one IP+browser doesn't sweep in every identified
+    // user sitting behind it.
+    it("matches an identified user, or a device only while it is still anonymous", () => {
       const filters = JSON.stringify([{ parameter: "user_id", type: "equals", value: ["user123"] }]);
       const result = getFilterStatement(filters);
-      expect(result).toBe("AND (user_id = 'user123' OR identified_user_id = 'user123')");
+      expect(result).toBe("AND (identified_user_id = 'user123' OR (user_id = 'user123' AND identified_user_id = ''))");
     });
 
-    it("should check both user_id and identified_user_id for not_equals", () => {
+    it("negates exactly the equals predicate for not_equals", () => {
       const filters = JSON.stringify([{ parameter: "user_id", type: "not_equals", value: ["user123"] }]);
       const result = getFilterStatement(filters);
-      expect(result).toBe("AND (user_id != 'user123' AND identified_user_id != 'user123')");
+      expect(result).toBe(
+        "AND NOT (identified_user_id = 'user123' OR (user_id = 'user123' AND identified_user_id = ''))"
+      );
     });
 
     it("should handle multiple user IDs with equals using OR", () => {
       const filters = JSON.stringify([{ parameter: "user_id", type: "equals", value: ["user1", "user2"] }]);
       const result = getFilterStatement(filters);
-      expect(result).toContain("user_id = 'user1' OR identified_user_id = 'user1'");
-      expect(result).toContain("user_id = 'user2' OR identified_user_id = 'user2'");
+      expect(result).toContain("identified_user_id = 'user1' OR (user_id = 'user1' AND identified_user_id = '')");
+      expect(result).toContain("identified_user_id = 'user2' OR (user_id = 'user2' AND identified_user_id = '')");
       expect(result).toContain(" OR ");
     });
 
     it("should handle multiple user IDs with not_equals using AND", () => {
       const filters = JSON.stringify([{ parameter: "user_id", type: "not_equals", value: ["user1", "user2"] }]);
       const result = getFilterStatement(filters);
-      expect(result).toContain("user_id != 'user1' AND identified_user_id != 'user1'");
-      expect(result).toContain("user_id != 'user2' AND identified_user_id != 'user2'");
+      expect(result).toContain("NOT (identified_user_id = 'user1' OR (user_id = 'user1' AND identified_user_id = ''))");
+      expect(result).toContain("NOT (identified_user_id = 'user2' OR (user_id = 'user2' AND identified_user_id = ''))");
+      expect(result).toContain(" AND ");
     });
   });
 
@@ -284,16 +273,15 @@ describe("getFilterStatement", () => {
   });
 
   describe("Channel session acquisition filter", () => {
-    it("should filter by the first non-empty channel in each session", () => {
+    it("should filter by the first attributed channel in each session", () => {
       const filters = JSON.stringify([{ parameter: "channel", type: "equals", value: ["Organic Search"] }]);
       const result = getFilterStatement(filters, 123, "AND timestamp > now() - INTERVAL 1 DAY");
 
       expect(result).toContain("session_id IN");
-      expect(result).toContain("argMin(channel, timestamp) AS session_channel");
+      expect(result).toContain("argMinIf(channel, timestamp, channel NOT IN ('Direct', 'Internal', ''))");
+      expect(result).toContain("AS session_channel");
       expect(result).toContain("site_id = 123");
       expect(result).toContain("timestamp > now() - INTERVAL 1 DAY");
-      expect(result).toContain("channel IS NOT NULL");
-      expect(result).toContain("channel <> ''");
       expect(result).toContain("session_channel = 'Organic Search'");
     });
 
@@ -312,7 +300,8 @@ describe("getFilterStatement", () => {
       const filters = JSON.stringify([{ parameter: "entry_page", type: "equals", value: ["/home"] }]);
       const result = getFilterStatement(filters);
       expect(result).toContain("session_id IN");
-      expect(result).toContain("argMin(pathname, timestamp) AS entry_pathname");
+      expect(result).toContain("argMin(pathname, timestamp_ms) AS entry_pathname");
+      expect(result).toContain("type = 'pageview'");
       expect(result).toContain("entry_pathname = '/home'");
     });
 
@@ -336,7 +325,8 @@ describe("getFilterStatement", () => {
       const filters = JSON.stringify([{ parameter: "exit_page", type: "equals", value: ["/checkout"] }]);
       const result = getFilterStatement(filters);
       expect(result).toContain("session_id IN");
-      expect(result).toContain("argMax(pathname, timestamp) AS exit_pathname");
+      expect(result).toContain("argMax(pathname, timestamp_ms) AS exit_pathname");
+      expect(result).toContain("type = 'pageview'");
       expect(result).toContain("exit_pathname = '/checkout'");
     });
 
@@ -346,20 +336,6 @@ describe("getFilterStatement", () => {
       expect(result).toContain("exit_pathname = '/checkout'");
       expect(result).toContain("exit_pathname = '/thank-you'");
       expect(result).toContain(" OR ");
-    });
-  });
-
-  describe("UTM filter handling", () => {
-    it("should use url_parameters map for utm_source", () => {
-      const filters = JSON.stringify([{ parameter: "utm_source", type: "equals", value: ["google"] }]);
-      const result = getFilterStatement(filters);
-      expect(result).toBe("AND url_parameters['utm_source'] = 'google'");
-    });
-
-    it("should use url_parameters map for utm_medium", () => {
-      const filters = JSON.stringify([{ parameter: "utm_medium", type: "equals", value: ["cpc"] }]);
-      const result = getFilterStatement(filters);
-      expect(result).toBe("AND url_parameters['utm_medium'] = 'cpc'");
     });
   });
 
@@ -381,28 +357,6 @@ describe("getFilterStatement", () => {
     });
   });
 
-  describe("Special parameter transformations", () => {
-    it("should use domainWithoutWWW for referrer", () => {
-      const filters = JSON.stringify([{ parameter: "referrer", type: "equals", value: ["google.com"] }]);
-      const result = getFilterStatement(filters);
-      expect(result).toBe("AND domainWithoutWWW(referrer) = 'google.com'");
-    });
-
-    it("should use dimensions concat for dimensions filter", () => {
-      const filters = JSON.stringify([{ parameter: "dimensions", type: "equals", value: ["1920x1080"] }]);
-      const result = getFilterStatement(filters);
-      expect(result).toContain("concat(toString(screen_width), 'x', toString(screen_height))");
-      expect(result).toContain("= '1920x1080'");
-    });
-
-    it("should use city concat for city filter", () => {
-      const filters = JSON.stringify([{ parameter: "city", type: "equals", value: ["CA-San Francisco"] }]);
-      const result = getFilterStatement(filters);
-      expect(result).toContain("concat(toString(region), '-', toString(city))");
-      expect(result).toContain("= 'CA-San Francisco'");
-    });
-  });
-
   describe("Complex multi-filter scenarios", () => {
     it("should handle multiple different filter types together", () => {
       const filters = JSON.stringify([
@@ -417,5 +371,318 @@ describe("getFilterStatement", () => {
       // 1 at start + 2 between 3 filters = 3 ANDs total
       expect(result.match(/AND/g)?.length).toBe(3);
     });
+  });
+
+  describe("Null check filters on standard parameters", () => {
+    it("should handle is_null on a standard column", () => {
+      const filters = JSON.stringify([{ parameter: "browser", type: "is_null", value: [] }]);
+      const result = getFilterStatement(filters);
+      expect(result).toBe("AND (browser IS NULL OR browser = '')");
+    });
+
+    it("should handle is_not_null on a standard column", () => {
+      const filters = JSON.stringify([{ parameter: "country", type: "is_not_null", value: [] }]);
+      const result = getFilterStatement(filters);
+      expect(result).toBe("AND (country IS NOT NULL AND country != '')");
+    });
+
+    it("should apply is_null to transformed expressions", () => {
+      const filters = JSON.stringify([{ parameter: "utm_source", type: "is_null", value: [] }]);
+      const result = getFilterStatement(filters);
+      expect(result).toBe("AND (url_parameters['utm_source'] IS NULL OR url_parameters['utm_source'] = '')");
+    });
+
+    it.each([
+      ["city", "city"],
+      ["browser_version", "browser_version"],
+      ["operating_system_version", "operating_system_version"],
+    ])("should test the stored %s column, not its never-empty display expression", (parameter, column) => {
+      const isNull = getFilterStatement(JSON.stringify([{ parameter, type: "is_null", value: [] }]));
+      const isNotNull = getFilterStatement(JSON.stringify([{ parameter, type: "is_not_null", value: [] }]));
+      expect(isNull).toBe(`AND (${column} IS NULL OR ${column} = '')`);
+      expect(isNotNull).toBe(`AND (${column} IS NOT NULL AND ${column} != '')`);
+      expect(isNull).not.toContain("concat");
+    });
+
+    it("should treat unknown dimensions as a 0x0 screen", () => {
+      const filters = JSON.stringify([{ parameter: "dimensions", type: "is_null", value: [] }]);
+      expect(getFilterStatement(filters)).toBe("AND (screen_width = 0 AND screen_height = 0)");
+      const notNull = JSON.stringify([{ parameter: "dimensions", type: "is_not_null", value: [] }]);
+      expect(getFilterStatement(notNull)).toBe("AND (screen_width != 0 OR screen_height != 0)");
+    });
+
+    it("should compare unknown coordinates with 0, not ''", () => {
+      // `lat = ''` is CANNOT_PARSE_NUMBER in ClickHouse.
+      expect(getFilterStatement(JSON.stringify([{ parameter: "lat", type: "is_null", value: [] }]))).toBe(
+        "AND lat = 0"
+      );
+      expect(getFilterStatement(JSON.stringify([{ parameter: "lon", type: "is_not_null", value: [] }]))).toBe(
+        "AND lon != 0"
+      );
+    });
+
+    it("should handle is_not_null inside a session-level subquery", () => {
+      const filters = JSON.stringify([{ parameter: "event_name", type: "is_not_null", value: [] }]);
+      const result = getFilterStatement(filters);
+      expect(result).toContain("session_id IN");
+      expect(result).toContain("(event_name IS NOT NULL AND event_name != '')");
+    });
+  });
+
+  describe("Starts with and ends with filters", () => {
+    it("should append % for starts_with", () => {
+      const filters = JSON.stringify([{ parameter: "pathname", type: "starts_with", value: ["/blog"] }]);
+      expect(getFilterStatement(filters)).toBe("AND pathname LIKE '/blog%'");
+    });
+
+    it("should prepend % for ends_with", () => {
+      const filters = JSON.stringify([{ parameter: "pathname", type: "ends_with", value: ["/checkout"] }]);
+      expect(getFilterStatement(filters)).toBe("AND pathname LIKE '%/checkout'");
+    });
+
+    it("should OR-join multiple starts_with values", () => {
+      const filters = JSON.stringify([{ parameter: "pathname", type: "starts_with", value: ["/blog", "/docs"] }]);
+      expect(getFilterStatement(filters)).toBe("AND (pathname LIKE '/blog%' OR pathname LIKE '/docs%')");
+    });
+
+    it("escapes % in user values so they match literally", () => {
+      // A literal "%" in the value is escaped to \% in the LIKE pattern, so
+      // starts_with "50%" only matches strings starting with the literal "50%".
+      const filters = JSON.stringify([{ parameter: "pathname", type: "starts_with", value: ["50%"] }]);
+      expect(getFilterStatement(filters)).toBe("AND pathname LIKE '50\\\\%%'");
+    });
+
+    it("escapes _ in user values so it matches literally", () => {
+      const filters = JSON.stringify([{ parameter: "pathname", type: "ends_with", value: ["a_b"] }]);
+      expect(getFilterStatement(filters)).toBe("AND pathname LIKE '%a\\\\_b'");
+    });
+
+    it("escapes backslashes in user values before LIKE wrapping", () => {
+      const filters = JSON.stringify([{ parameter: "pathname", type: "starts_with", value: ["C:\\temp"] }]);
+      // The value's backslash is LIKE-escaped to \\, then SqlString doubles
+      // each backslash in the string literal.
+      expect(getFilterStatement(filters)).toBe("AND pathname LIKE 'C:\\\\\\\\temp%'");
+    });
+  });
+
+  describe("Greater/less than or equal filters", () => {
+    it("should handle greater_than_or_equal", () => {
+      const filters = JSON.stringify([{ parameter: "lat", type: "greater_than_or_equal", value: ["40.5"] }]);
+      expect(getFilterStatement(filters)).toBe("AND lat >= 40.5");
+    });
+
+    it("should handle less_than_or_equal", () => {
+      const filters = JSON.stringify([{ parameter: "lon", type: "less_than_or_equal", value: ["-70.25"] }]);
+      expect(getFilterStatement(filters)).toBe("AND lon <= -70.25");
+    });
+
+    it("should only use the first value for numeric comparisons", () => {
+      const filters = JSON.stringify([{ parameter: "lat", type: "greater_than_or_equal", value: ["10", "20"] }]);
+      expect(getFilterStatement(filters)).toBe("AND lat >= 10");
+    });
+
+    it("should reject numeric comparisons on non-numeric parameters", () => {
+      // `pathname >= 10` compares a String with a UInt8, which ClickHouse
+      // rejects (NO_COMMON_TYPE) — a 500 instead of a 400.
+      const filters = JSON.stringify([{ parameter: "pathname", type: "greater_than_or_equal", value: ["10"] }]);
+      expect(() => getFilterStatement(filters)).toThrow(
+        'greater_than_or_equal filters only apply to lat and lon, not "pathname"'
+      );
+    });
+
+    it("should reject numeric comparisons inside session-level subqueries too", () => {
+      const filters = JSON.stringify([{ parameter: "event_name", type: "less_than", value: ["5"] }]);
+      expect(() => getFilterStatement(filters)).toThrow("only apply to lat and lon");
+    });
+
+    it("should reject string operators on numeric parameters", () => {
+      const filters = JSON.stringify([{ parameter: "lat", type: "contains", value: ["40"] }]);
+      expect(() => getFilterStatement(filters)).toThrow('contains filters do not apply to the numeric parameter "lat"');
+    });
+
+    it("should reject non-numeric values for lat/lon equality", () => {
+      const filters = JSON.stringify([{ parameter: "lon", type: "equals", value: ["east"] }]);
+      expect(() => getFilterStatement(filters)).toThrow("Invalid numeric value for equals filter: east");
+    });
+  });
+
+  describe("Multi-value wildcard filters", () => {
+    it("should OR-join multiple contains values with % wrapping", () => {
+      const filters = JSON.stringify([{ parameter: "pathname", type: "contains", value: ["/blog", "/docs"] }]);
+      expect(getFilterStatement(filters)).toBe("AND (pathname LIKE '%/blog%' OR pathname LIKE '%/docs%')");
+    });
+
+    it("should AND-join multiple not_contains values", () => {
+      const filters = JSON.stringify([{ parameter: "pathname", type: "not_contains", value: ["/admin", "/internal"] }]);
+      expect(getFilterStatement(filters)).toBe(
+        "AND (pathname NOT LIKE '%/admin%' AND pathname NOT LIKE '%/internal%')"
+      );
+    });
+
+    it("escapes % and _ in multi-value contains so they match literally", () => {
+      const filters = JSON.stringify([{ parameter: "pathname", type: "contains", value: ["100%", "a_b"] }]);
+      expect(getFilterStatement(filters)).toBe("AND (pathname LIKE '%100\\\\%%' OR pathname LIKE '%a\\\\_b%')");
+    });
+
+    it("should OR-join multiple contains values on transformed params", () => {
+      const filters = JSON.stringify([{ parameter: "utm_source", type: "contains", value: ["google", "bing"] }]);
+      expect(getFilterStatement(filters)).toBe(
+        "AND (url_parameters['utm_source'] LIKE '%google%' OR url_parameters['utm_source'] LIKE '%bing%')"
+      );
+    });
+  });
+
+  describe("Generic session-level subqueries via sessionLevelParams", () => {
+    const normalize = (sql: string) => sql.replace(/\s+/g, " ").trim();
+
+    it("should route arbitrary params to a session-level subquery when configured", () => {
+      const filters = JSON.stringify([{ parameter: "pathname", type: "equals", value: ["/pricing"] }]);
+      const result = getFilterStatement(filters, undefined, undefined, { sessionLevelParams: ["pathname"] });
+      expect(normalize(result)).toBe(
+        "AND session_id IN ( SELECT DISTINCT session_id FROM events WHERE pathname = '/pricing' )"
+      );
+    });
+
+    it("should include siteId and time filter in the generic session subquery", () => {
+      const filters = JSON.stringify([{ parameter: "hostname", type: "equals", value: ["app.example.com"] }]);
+      const result = getFilterStatement(filters, 42, "AND timestamp > now() - INTERVAL 1 DAY", {
+        sessionLevelParams: ["hostname"],
+      });
+      expect(normalize(result)).toBe(
+        "AND session_id IN ( SELECT DISTINCT session_id FROM events WHERE site_id = 42 AND timestamp > now() - INTERVAL 1 DAY AND hostname = 'app.example.com' )"
+      );
+    });
+
+    it("should handle negated filters inside the session subquery", () => {
+      const filters = JSON.stringify([{ parameter: "hostname", type: "not_equals", value: ["bad.example.com"] }]);
+      const result = getFilterStatement(filters, undefined, undefined, { sessionLevelParams: ["hostname"] });
+      expect(normalize(result)).toBe(
+        "AND session_id NOT IN ( SELECT DISTINCT session_id FROM events WHERE hostname = 'bad.example.com' )"
+      );
+    });
+
+    it("excludes sessions containing any negatively filtered value", () => {
+      const filters = JSON.stringify([{ parameter: "pathname", type: "not_contains", value: ["/admin", "/debug"] }]);
+      const result = getFilterStatement(filters, undefined, undefined, { sessionLevelParams: ["pathname"] });
+      expect(normalize(result)).toBe(
+        "AND session_id NOT IN ( SELECT DISTINCT session_id FROM events WHERE (pathname LIKE '%/admin%' OR pathname LIKE '%/debug%') )"
+      );
+    });
+
+    it("treats is_null as no non-empty value anywhere in the session", () => {
+      const filters = JSON.stringify([{ parameter: "event_name", type: "is_null", value: [] }]);
+      const result = getFilterStatement(filters, undefined, undefined, { sessionLevelParams: ["event_name"] });
+      expect(normalize(result)).toBe(
+        "AND session_id NOT IN ( SELECT DISTINCT session_id FROM events WHERE (event_name IS NOT NULL AND event_name != '') )"
+      );
+    });
+
+    it("applies getSqlParam transforms inside generic session subqueries", () => {
+      // Transformed params like city keep their concat() expression when
+      // routed session-level.
+      const filters = JSON.stringify([{ parameter: "city", type: "equals", value: ["CA-San Francisco"] }]);
+      const result = getFilterStatement(filters, undefined, undefined, { sessionLevelParams: ["city"] });
+      expect(normalize(result)).toBe(
+        "AND session_id IN ( SELECT DISTINCT session_id FROM events WHERE concat(toString(region), '-', toString(city)) = 'CA-San Francisco' )"
+      );
+    });
+  });
+
+  describe("fieldMappings option", () => {
+    it("should rewrite mapped expressions to CTE column names", () => {
+      const filters = JSON.stringify([{ parameter: "utm_source", type: "equals", value: ["google"] }]);
+      const result = getFilterStatement(filters, undefined, undefined, {
+        fieldMappings: { "url_parameters['utm_source']": "utm_source" },
+      });
+      expect(result).toBe("AND utm_source = 'google'");
+    });
+
+    it("should apply multiple mappings", () => {
+      const filters = JSON.stringify([
+        { parameter: "utm_source", type: "equals", value: ["google"] },
+        { parameter: "utm_medium", type: "contains", value: ["cpc"] },
+      ]);
+      const result = getFilterStatement(filters, undefined, undefined, {
+        fieldMappings: {
+          "url_parameters['utm_source']": "utm_source",
+          "url_parameters['utm_medium']": "utm_medium",
+        },
+      });
+      expect(result).toBe("AND utm_source = 'google' AND utm_medium LIKE '%cpc%'");
+    });
+
+    it("does not rewrite mapping tokens inside user-supplied string literals", () => {
+      // Mappings are applied where column identifiers are emitted, never as a
+      // rewrite over the finished SQL, so a filter VALUE that happens to equal
+      // a mapped token is left untouched.
+      const filters = JSON.stringify([
+        { parameter: "pathname", type: "equals", value: ["/pricing"] },
+        { parameter: "page_title", type: "equals", value: ["pathname"] },
+      ]);
+      const result = getFilterStatement(filters, undefined, undefined, {
+        fieldMappings: { pathname: "page_path" },
+      });
+      expect(result).toBe("AND page_path = '/pricing' AND page_title = 'pathname'");
+    });
+
+    it("should apply mappings to the lat/lon tolerance branch", () => {
+      const filters = JSON.stringify([{ parameter: "lat", type: "equals", value: ["40.7128"] }]);
+      const result = getFilterStatement(filters, undefined, undefined, {
+        fieldMappings: { lat: "latitude" },
+      });
+      expect(result).toContain("latitude >= 40.7118");
+      expect(result).toContain("latitude <= 40.7138");
+      expect(result).not.toContain("(lat >=");
+    });
+
+    it("should apply mappings to negated multi-value lat/lon filters", () => {
+      const filters = JSON.stringify([{ parameter: "lon", type: "not_equals", value: ["-74.006", "-73.5"] }]);
+      const result = getFilterStatement(filters, undefined, undefined, {
+        fieldMappings: { lon: "longitude" },
+      });
+      expect(result).toContain("NOT ((longitude >= -74.007 AND longitude <= -74.005)");
+      expect(result).toContain("(longitude >= -73.501 AND longitude <= -73.499)");
+    });
+
+    it("does not rewrite quote-containing mapping tokens inside values", () => {
+      // Values containing a production-shaped mapping token
+      // (url_parameters['x']) also survive intact.
+      const filters = JSON.stringify([
+        { parameter: "page_title", type: "equals", value: ["url_parameters['utm_source']"] },
+      ]);
+      const result = getFilterStatement(filters, undefined, undefined, {
+        fieldMappings: { "url_parameters['utm_source']": "utm_source" },
+      });
+      expect(result).toBe("AND page_title = 'url_parameters[\\'utm_source\\']'");
+    });
+  });
+});
+
+describe("filterParamError", () => {
+  it("accepts absent and valid filters", () => {
+    expect(filterParamError(undefined)).toBeNull();
+    expect(filterParamError("")).toBeNull();
+    expect(filterParamError(JSON.stringify([{ parameter: "pathname", type: "equals", value: ["/"] }]))).toBeNull();
+  });
+
+  it("explains malformed JSON, unknown parameters, bad regexes and non-numeric comparisons", () => {
+    expect(filterParamError("not json")).toBe("Invalid JSON format");
+    expect(filterParamError(JSON.stringify([{ parameter: "nope", type: "equals", value: ["x"] }]))).toMatch(
+      /0\.parameter/
+    );
+    expect(
+      filterParamError(JSON.stringify([{ parameter: "pathname", type: "regex", value: ["[invalid"] }]))
+    ).toBeTruthy();
+    expect(filterParamError(JSON.stringify([{ parameter: "lat", type: "greater_than", value: ["abc"] }]))).toMatch(
+      /Invalid numeric value/
+    );
+    expect(filterParamError(JSON.stringify([{ parameter: "browser", type: "greater_than", value: ["5"] }]))).toBe(
+      'greater_than filters only apply to lat and lon, not "browser"'
+    );
+    expect(filterParamError(["array"])).toBe("filters must be a JSON array");
+    expect(filterParamError(JSON.stringify([{ parameter: "pathname", type: "equals", value: [] }]))).toMatch(
+      /needs at least one value/
+    );
+    expect(filterParamError(JSON.stringify([{ parameter: "pathname", type: "is_null", value: [] }]))).toBeNull();
   });
 });

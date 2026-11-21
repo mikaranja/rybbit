@@ -1,3 +1,4 @@
+import { isClickHouseDateTime, toClickHouseDateTime } from "../../../db/clickhouse/dateTime.js";
 import { clearSelfReferrer, getAllUrlParams } from "../../tracker/utils.js";
 import { getChannel } from "../../tracker/getChannel.js";
 import { RybbitEvent } from "./rybbit.js";
@@ -104,10 +105,21 @@ export class UmamiImportMapper {
     event_type: z.enum(["1", "2"]),
     event_name: z.string().max(256),
     distinct_id: z.string().max(64),
-    created_at: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/),
+    created_at: z
+      .string()
+      .regex(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/)
+      // The regex accepts 2024-02-31; a row that is not a real instant is
+      // dropped here instead of failing the whole batch at serialisation.
+      .refine(isClickHouseDateTime),
   });
 
   static readonly umamiEventKeyOnlySchema = deriveKeyOnlySchema(UmamiImportMapper.umamiEventSchema);
+
+  // Match case-insensitively like osMap does — raw umami exports vary in casing.
+  private static deriveOsVersion(rawOs: string): string {
+    const key = rawOs.toLowerCase();
+    return key === "windows 10" ? "10" : key === "windows 7" ? "7" : "";
+  }
 
   static transform(events: UmamiEvent[], site: number, importId: string): RybbitEvent[] {
     return events.reduce<RybbitEvent[]>((acc, event) => {
@@ -125,7 +137,7 @@ export class UmamiImportMapper {
 
       acc.push({
         site_id: site,
-        timestamp: data.created_at,
+        timestamp: toClickHouseDateTime(data.created_at),
         session_id: data.session_id,
         user_id: data.distinct_id,
         hostname: data.hostname,
@@ -138,7 +150,7 @@ export class UmamiImportMapper {
         browser: data.browser,
         browser_version: "",
         operating_system: data.os,
-        operating_system_version: event.os === "Windows 10" ? "10" : event.os === "Windows 7" ? "7" : "",
+        operating_system_version: UmamiImportMapper.deriveOsVersion(event.os),
         language: data.language,
         country: data.country,
         region: data.region,

@@ -168,9 +168,11 @@ export function getChannel(referrer: string, querystring: string, hostname?: str
     }
   }
 
-  // If it's a self-referral and has no UTM parameters, treat it as internal traffic
-  if (!referrer && !utmSource && !utmMedium && !utmCampaign && !gclid && !gadSource) {
-    return selfReferral ? "Internal" : "Direct";
+  if (!utmSource && !utmMedium && !utmCampaign && !gclid && !gadSource) {
+    if (!referrer) return "Direct";
+    // Navigation between the site's own hosts (www ↔ apex, subdomain → parent)
+    // is internal traffic, not a new acquisition.
+    if (selfReferral) return "Internal";
   }
 
   // Use utility functions for better categorization
@@ -187,6 +189,7 @@ export function getChannel(referrer: string, querystring: string, hostname?: str
   if (
     (referringDomain === "$direct" || (!referrer && !selfReferral)) &&
     !utmMedium &&
+    !utmCampaign &&
     (!utmSource || utmSource === "direct" || utmSource === "(direct)")
   ) {
     return "Direct";
@@ -287,9 +290,11 @@ export function getChannel(referrer: string, querystring: string, hostname?: str
   if (/event|conference|webinar/.test(utmCampaign)) return "Event";
   if (/social|facebook|twitter|instagram|linkedin/.test(utmCampaign)) return "Organic Social";
 
-  // If referring domain exists but we couldn't categorize it
-  // Don't mark as referral if it's a self-referral
-  if (referringDomain && referringDomain !== "$direct" && !selfReferral) return "Referral";
+  // If referring domain or UTM parameters exist but couldn't be categorized into a specific channel,
+  // classify as Referral (unless it's a self-referral)
+  if ((utmSource || utmMedium || utmCampaign || (referringDomain && referringDomain !== "$direct")) && !selfReferral) {
+    return "Referral";
+  }
 
   // Default fallback
   return "Unknown";

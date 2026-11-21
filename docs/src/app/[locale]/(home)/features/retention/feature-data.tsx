@@ -118,7 +118,7 @@ export const whoUses: WhoUsesItem[] = [
   },
   {
     icon: <BarChart3 className="w-6 h-6" />,
-    title: "Data-driven teams",
+    title: "Analytics teams",
     description:
       "Combine retention data with event tracking and funnels to build a complete picture of user engagement over time.",
   },
@@ -133,12 +133,7 @@ export const faqItems: FAQItem[] = [
   {
     question: "What counts as a 'return visit'?",
     answer:
-      "A return visit is any session by a previously seen visitor on a subsequent day or week. Rybbit uses privacy-friendly identifiers (daily rotating salts) to recognize returning visitors without cookies or personal data.",
-  },
-  {
-    question: "Can I see retention for specific user segments?",
-    answer:
-      "Yes. Apply any filter — country, device, referrer, UTM source — to see retention data for specific segments. This helps you understand which audiences have the best long-term engagement.",
+      "A return visit is any session by a previously seen visitor on a subsequent day or week. Rybbit recognizes returning visitors with an anonymous hashed identifier, without cookies or personal data. If you turn on the optional daily-rotating salt for extra privacy, visitors can't be linked across days, so multi-day retention stops being meaningful.",
   },
   {
     question: "What time ranges are available?",

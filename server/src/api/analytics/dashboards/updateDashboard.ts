@@ -36,7 +36,7 @@ export async function updateDashboard(
       return reply.status(403).send({ error: "Dashboard does not belong to the specified site" });
     }
 
-    // Site access is enforced by the `authSite` (requireSiteAccess) preHandler.
+    // The route guard enforces dashboards:write on the site.
     const result = await db
       .update(dashboards)
       .set({
@@ -56,7 +56,7 @@ export async function updateDashboard(
     if (error instanceof z.ZodError) {
       return reply.status(400).send({ error: "Validation error", details: error.errors });
     }
-    console.error("Error updating dashboard:", error);
+    request.log.error({ err: error }, "Error updating dashboard");
     return reply.status(500).send({ error: "Failed to update dashboard" });
   }
 }

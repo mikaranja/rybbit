@@ -10,7 +10,7 @@ const inputVariants = cva(
     variants: {
       inputSize: {
         default: "h-9 px-3 py-1 text-sm file:text-sm",
-        sm: "h-7 px-2 py-0.5 text-xs file:text-xs",
+        sm: "h-8 px-2.5 py-0.5 text-xs file:text-xs",
       },
     },
     defaultVariants: {
@@ -20,8 +20,7 @@ const inputVariants = cva(
 );
 
 export interface InputProps
-  extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "size">,
-  VariantProps<typeof inputVariants> {
+  extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "size">, VariantProps<typeof inputVariants> {
   isSearch?: boolean;
 }
 
@@ -30,7 +29,7 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
     if (isSearch) {
       return (
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
           <input type={type} className={cn(inputVariants({ inputSize }), "pl-9", className)} ref={ref} {...props} />
         </div>
       );

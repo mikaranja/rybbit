@@ -31,15 +31,14 @@ export async function getFunnels(
         configuration: data.configuration || {},
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
-        // Include any additional analytics data that might be stored
-        conversionRate: data.lastResult?.conversionRate || null,
-        totalVisitors: data.lastResult?.totalVisitors || null,
+        // Sessions and conversion are computed per period by getFunnelSummaries;
+        // nothing is stored with the definition.
       };
     });
 
     return reply.send({ data: funnels });
   } catch (error) {
-    console.error("Error fetching funnels:", error);
+    request.log.error({ err: error }, "Error fetching funnels");
     return reply.status(500).send({ error: "Failed to fetch funnels" });
   }
 }

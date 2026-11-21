@@ -1,9 +1,9 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useSitePath } from "@/app/[site]/sessions/components/useSitePath";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/basic-tabs";
 import { ArrowRight } from "lucide-react";
 import { useExtracted } from "next-intl";
 import Link from "next/link";
-import { useParams } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { useGetSessionDetailsInfinite } from "../../../api/analytics/hooks/useGetUserSessions";
@@ -28,17 +28,17 @@ export function SessionDetails({ session, userId, highlightedEventTimestamp }: S
     hasNextPage,
     isFetchingNextPage,
   } = useGetSessionDetailsInfinite(session.session_id);
-  const { site } = useParams();
+  const sitePath = useSitePath();
   const t = useExtracted();
 
   // Flatten all events into a single array
   const allEvents = useMemo(() => {
     if (!sessionDetailsData?.pages) return [];
-    return sessionDetailsData.pages.flatMap((page) => page.data?.events || []);
+    return sessionDetailsData.pages.flatMap((page) => page?.events || []);
   }, [sessionDetailsData?.pages]);
 
   // Get session details from the first page
-  const sessionDetails = sessionDetailsData?.pages[0]?.data?.session;
+  const sessionDetails = sessionDetailsData?.pages[0]?.session;
 
   // Event type filter state
   const [visibleEventTypes, setVisibleEventTypes] = useState<Set<string>>(
@@ -50,6 +50,9 @@ export function SessionDetails({ session, userId, highlightedEventTimestamp }: S
       "copy",
       "form_submit",
       "input_change",
+      // Errors used to start hidden, so a session's failures only appeared
+      // after finding and switching on their chip.
+      "error",
     ])
   );
 
@@ -86,7 +89,7 @@ export function SessionDetails({ session, userId, highlightedEventTimestamp }: S
             {t("Error loading session details. Please try again.")}
           </AlertDescription>
         </Alert>
-      ) : sessionDetailsData?.pages[0]?.data ? (
+      ) : sessionDetailsData?.pages[0] ? (
         <Tabs defaultValue="timeline" className="mt-4">
           <div className="flex justify-between items-center mb-6">
             <TabsList>
@@ -95,9 +98,9 @@ export function SessionDetails({ session, userId, highlightedEventTimestamp }: S
             </TabsList>
             {!userId && (
               <Link
-                href={`/${site}/user/${encodeURIComponent(
+                href={sitePath(`user/${encodeURIComponent(
                   isIdentified ? session.identified_user_id : session.user_id
-                )}`}
+                )}`)}
               >
                 <Button size={"sm"} variant={"success"}>
                   {t("View User")} <ArrowRight className="w-4 h-4" />
@@ -117,7 +120,7 @@ export function SessionDetails({ session, userId, highlightedEventTimestamp }: S
               hasNextPage={hasNextPage ?? false}
               isFetchingNextPage={isFetchingNextPage}
               fetchNextPage={fetchNextPage}
-              totalEvents={sessionDetailsData.pages[0]?.data?.pagination?.total ?? 0}
+              totalEvents={sessionDetailsData.pages[0]?.pagination?.total ?? 0}
             />
           </TabsContent>
 

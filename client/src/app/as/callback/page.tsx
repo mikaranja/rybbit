@@ -11,14 +11,15 @@ import { Label } from "@/components/ui/label";
 import { ArrowRight, Check, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import React, { Suspense, useEffect, useState } from "react";
+import React, { Suspense, useEffect, useRef, useState } from "react";
 import { addSite } from "../../../api/admin/endpoints";
 import { RybbitTextLogo } from "../../../components/RybbitLogo";
 import { useSetPageTitle } from "../../../hooks/useSetPageTitle";
 import { authClient } from "../../../lib/auth";
-import { IS_CLOUD } from "../../../lib/const";
+import { BACKEND_URL, IS_CLOUD } from "../../../lib/const";
 import { userStore } from "../../../lib/userStore";
 import { cn, isValidDomain, normalizeDomain } from "../../../lib/utils";
+import { slugFromName } from "../../signup/orgSlug";
 
 // Client component to handle AppSumo code from URL params
 function AppSumoCodeHandler({
@@ -64,7 +65,6 @@ export default function AppSumoSignupPage() {
 
   // Step 2: Organization creation
   const [orgName, setOrgName] = useState("");
-  const [orgSlug, setOrgSlug] = useState("");
 
   // Step 3: Website addition
   const [organizationId, setOrganizationId] = useState("");
@@ -117,24 +117,25 @@ export default function AppSumoSignupPage() {
     activateForExistingUser();
   }, [isExistingUser, appsumoCode, organizationId, licenseActivated, isInitializing]);
 
-  // Handle organization name change and generate slug
-  const handleOrgNameChange = (value: string) => {
-    setOrgName(value);
-    if (value) {
-      const generatedSlug = value
-        .toLowerCase()
-        .replace(/\s+/g, "-")
-        .replace(/[^a-z0-9-]/g, "");
-      setOrgSlug(generatedSlug);
-    }
-  };
+  // A signed-in user without an organization creates one here, and then both the submit
+  // handler and the existing-user effect reach activation. The code is single-use, so they
+  // share one request: a second one would fail and report the successful activation as failed.
+  const activation = useRef<{ key: string; result: Promise<boolean> } | null>(null);
 
   // Helper function to activate AppSumo license for an organization
-  const activateLicenseForOrg = async (orgId: string, code: string): Promise<boolean> => {
-    if (!code) return true; // No code to activate, consider it success
+  const activateLicenseForOrg = (orgId: string, code: string): Promise<boolean> => {
+    if (!code) return Promise.resolve(true); // No code to activate, consider it success
 
+    const key = `${orgId}:${code}`;
+    if (activation.current?.key !== key) {
+      activation.current = { key, result: requestLicenseActivation(orgId, code) };
+    }
+    return activation.current.result;
+  };
+
+  const requestLicenseActivation = async (orgId: string, code: string): Promise<boolean> => {
     try {
-      const response = await fetch("/api/as/activate", {
+      const response = await fetch(`${BACKEND_URL}/as/activate`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -146,24 +147,17 @@ export default function AppSumoSignupPage() {
         }),
       });
 
-      // if (!response.ok) {
-      //   const errorData = await response.json();
+      if (!response.ok) {
+        // The server names the failure in `error`, with detail in `message` for some.
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error([errorData.error, errorData.message].filter(Boolean).join(": ") || `HTTP ${response.status}`);
+      }
 
-      //   // If license is already activated, treat it as success (user can proceed)
-      //   if (response.status === 409 && errorData.error === "License already activated") {
-      //     console.log("AppSumo license was already activated");
-      //     return true;
-      //   }
-
-      //   throw new Error(errorData.error || "Failed to activate AppSumo license");
-      // }
-
-      // const licenseData = await response.json();
-      // console.log("AppSumo license activated:", licenseData);
       return true;
     } catch (licenseError) {
       console.error("Error activating AppSumo license:", licenseError);
-      setError("License activation failed. Please contact support with your license key.");
+      const reason = licenseError instanceof Error ? licenseError.message : String(licenseError);
+      setError(`License activation failed (${reason}). Please contact support with your license key.`);
       return false;
     }
   };
@@ -222,7 +216,7 @@ export default function AppSumoSignupPage() {
       // Create organization
       const { data, error } = await authClient.organization.create({
         name: orgName,
-        slug: orgSlug,
+        slug: slugFromName(orgName),
       });
 
       if (error) {
@@ -300,6 +294,7 @@ export default function AppSumoSignupPage() {
                 id="email"
                 label="Email"
                 type="email"
+                autoComplete="email"
                 placeholder="email@example.com"
                 required
                 value={email}
@@ -310,6 +305,7 @@ export default function AppSumoSignupPage() {
                 id="password"
                 label="Password"
                 type="password"
+                autoComplete="new-password"
                 placeholder="••••••••"
                 required
                 value={password}
@@ -330,11 +326,11 @@ export default function AppSumoSignupPage() {
                 loadingText="Creating account..."
                 onClick={handleAccountSubmit}
                 type="button"
-                className="mt-6 transition-all duration-300 h-11"
+                className="mt-6"
                 disabled={IS_CLOUD ? !turnstileToken || isLoading : isLoading}
               >
                 Continue
-                <ArrowRight className="ml-2 h-4 w-4" />
+                <ArrowRight className="h-4 w-4" />
               </AuthButton>
 
               <div className="text-center text-sm">
@@ -368,20 +364,19 @@ export default function AppSumoSignupPage() {
                   type="text"
                   placeholder="Acme Inc."
                   value={orgName}
-                  onChange={e => handleOrgNameChange(e.target.value)}
+                  onChange={e => setOrgName(e.target.value)}
                   required
-                  className="h-10 transition-all bg-neutral-100 dark:bg-neutral-800/50 border-neutral-200 dark:border-neutral-700"
                 />
               </div>
 
               <Button
-                className="w-full transition-all duration-300 h-11 bg-emerald-600 hover:bg-emerald-500 text-white"
+                className="w-full"
                 onClick={handleOrganizationSubmit}
-                disabled={isLoading || !orgName || !orgSlug}
+                disabled={isLoading || !orgName}
                 variant="success"
               >
                 Continue & Activate License
-                <ArrowRight className="ml-2 h-4 w-4" />
+                <ArrowRight className="h-4 w-4" />
               </Button>
             </div>
           </div>
@@ -400,27 +395,21 @@ export default function AppSumoSignupPage() {
                   placeholder="example.com or sub.example.com"
                   value={domain}
                   onChange={e => setDomain(e.target.value.toLowerCase())}
-                  className="h-10 transition-all bg-neutral-100 dark:bg-neutral-800/50 border-neutral-200 dark:border-neutral-700"
                 />
                 <p className="text-xs text-muted-foreground">Enter the domain of the website you want to track</p>
               </div>
 
               <div className="flex flex-col gap-3">
                 <Button
-                  className="w-full transition-all duration-300 h-11 bg-emerald-600 hover:bg-emerald-500 text-white"
+                  className="w-full"
                   onClick={handleWebsiteSubmit}
                   disabled={isLoading || !domain || !isValidDomain(domain)}
                   variant="success"
                 >
                   Add Site & Continue
-                  <ArrowRight className="ml-2 h-4 w-4" />
+                  <ArrowRight className="h-4 w-4" />
                 </Button>
-                <Button
-                  className="w-full transition-all duration-300 h-11"
-                  onClick={handleSkipWebsite}
-                  disabled={isLoading}
-                  variant="outline"
-                >
+                <Button className="w-full" onClick={handleSkipWebsite} disabled={isLoading} variant="outline">
                   Skip for now
                 </Button>
               </div>

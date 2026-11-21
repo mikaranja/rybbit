@@ -6,15 +6,15 @@ import { ArrowRight, ChevronDown, ChevronRight, Video } from "lucide-react";
 import { DateTime } from "luxon";
 import { useExtracted } from "next-intl";
 import Link from "next/link";
-import { useParams } from "next/navigation";
 import { memo, useCallback, useState } from "react";
 import { GetSessionsResponse } from "../../api/analytics/endpoints";
+import { useSitePath } from "@/app/[site]/sessions/components/useSitePath";
 import { useDateTimeFormat } from "@/hooks/useDateTimeFormat";
 import { formatShortDuration } from "../../lib/dateTimeUtils";
 import { cn, formatter, getUserDisplayName, truncateString } from "../../lib/utils";
 import { Avatar } from "../Avatar";
 import { Channel } from "../Channel";
-import { EventIcon, PageviewIcon } from "../EventIcons";
+import { EventTypeIcon } from "../EventIcons";
 import { IdentifiedBadge } from "../IdentifiedBadge";
 import {
   BrowserTooltipIcon,
@@ -25,6 +25,7 @@ import {
 import { Badge } from "../ui/badge";
 import { ReplayDrawer } from "./ReplayDrawer";
 import { SessionDetails } from "./SessionDetails";
+import { sessionEventCount } from "./sessionEventCount";
 
 interface SessionCardProps {
   session: GetSessionsResponse[number];
@@ -35,7 +36,7 @@ interface SessionCardProps {
 }
 
 export function SessionCard({ session, onClick, userId, expandedByDefault, highlightedEventTimestamp }: SessionCardProps) {
-  const { site } = useParams();
+  const sitePath = useSitePath();
   const t = useExtracted();
   const { hour12, formatDateTime } = useDateTimeFormat();
   const [expanded, setExpanded] = useState(expandedByDefault || false);
@@ -76,20 +77,24 @@ export function SessionCard({ session, onClick, userId, expandedByDefault, highl
       <div className="p-3 cursor-pointer" onClick={handleCardClick}>
         {/* Mobile layout - two rows */}
         <div className="flex flex-col gap-2 md:hidden">
-          {/* Top row on mobile - User name (left) + Timestamp (right) */}
+          {/* Top row on mobile - User name (left) + Timestamp (right).
+              On a single user's page the name repeats on every card, so it is
+              hidden there, matching the desktop layout. */}
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Avatar
-                size={24}
-                id={session.user_id}
-                lastActiveTime={DateTime.fromSQL(session.session_end, { zone: "utc" })}
-              />
-              <span className="text-xs text-neutral-600 dark:text-neutral-200 truncate max-w-[150px]">
-                {getUserDisplayName(session)}
-              </span>
-              {!!session.identified_user_id && <IdentifiedBadge traits={session.traits} />}
-            </div>
-            <span className="text-xs text-neutral-500 dark:text-neutral-400 ">
+            {!userId && (
+              <div className="flex items-center gap-2">
+                <Avatar
+                  size={24}
+                  id={session.user_id}
+                  lastActiveTime={DateTime.fromSQL(session.session_end, { zone: "utc" })}
+                />
+                <span className="text-xs text-neutral-600 dark:text-neutral-200 truncate max-w-[150px]">
+                  {getUserDisplayName(session)}
+                </span>
+                {!!session.identified_user_id && <IdentifiedBadge traits={session.traits} userId={session.identified_user_id} />}
+              </div>
+            )}
+            <span className="ml-auto text-xs text-neutral-500 dark:text-neutral-400">
               <span className="group-hover/card:hidden">
                 {formatDateTime(DateTime.fromSQL(session.session_start, { zone: "utc" }), {
                   month: "short",
@@ -149,7 +154,7 @@ export function SessionCard({ session, onClick, userId, expandedByDefault, highl
             <Tooltip>
               <TooltipTrigger asChild>
                 <Badge className="flex items-center gap-1 bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
-                  <PageviewIcon />
+                  <EventTypeIcon type="pageview" />
                   <span>{formatter(session.pageviews)}</span>
                 </Badge>
               </TooltipTrigger>
@@ -158,8 +163,8 @@ export function SessionCard({ session, onClick, userId, expandedByDefault, highl
             <Tooltip>
               <TooltipTrigger asChild>
                 <Badge className="flex items-center gap-1 bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
-                  <EventIcon />
-                  <span>{formatter(session.events + (session.button_clicks || 0) + (session.copies || 0) + (session.form_submits || 0) + (session.input_changes || 0))}</span>
+                  <EventTypeIcon type="custom_event" />
+                  <span>{formatter(sessionEventCount(session))}</span>
                 </Badge>
               </TooltipTrigger>
               <TooltipContent>{t("Events")}</TooltipContent>
@@ -176,9 +181,9 @@ export function SessionCard({ session, onClick, userId, expandedByDefault, highl
         <div className="hidden md:flex items-center gap-2">
           {!userId && (
             <Link
-              href={`/${site}/user/${encodeURIComponent(
+              href={sitePath(`user/${encodeURIComponent(
                 isIdentified ? session.identified_user_id : session.user_id
-              )}`}
+              )}`)}
               onClick={e => e.stopPropagation()}
               className="flex items-center gap-2"
             >
@@ -190,7 +195,7 @@ export function SessionCard({ session, onClick, userId, expandedByDefault, highl
               <span className="text-xs text-neutral-600 dark:text-neutral-200 w-24 truncate hover:underline">
                 {getUserDisplayName(session)}
               </span>
-              {!!session.identified_user_id && <IdentifiedBadge traits={session.traits} />}
+              {!!session.identified_user_id && <IdentifiedBadge traits={session.traits} userId={session.identified_user_id} />}
             </Link>
           )}
 
@@ -239,7 +244,7 @@ export function SessionCard({ session, onClick, userId, expandedByDefault, highl
             <Tooltip>
               <TooltipTrigger asChild>
                 <Badge className="flex items-center gap-1 bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
-                  <PageviewIcon />
+                  <EventTypeIcon type="pageview" />
                   <span>{formatter(session.pageviews)}</span>
                 </Badge>
               </TooltipTrigger>
@@ -248,8 +253,8 @@ export function SessionCard({ session, onClick, userId, expandedByDefault, highl
             <Tooltip>
               <TooltipTrigger asChild>
                 <Badge className="flex items-center gap-1 bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
-                  <EventIcon />
-                  <span>{formatter(session.events + (session.button_clicks || 0) + (session.copies || 0) + (session.form_submits || 0) + (session.input_changes || 0))}</span>
+                  <EventTypeIcon type="custom_event" />
+                  <span>{formatter(sessionEventCount(session))}</span>
                 </Badge>
               </TooltipTrigger>
               <TooltipContent>{t("Events")}</TooltipContent>
@@ -365,11 +370,13 @@ export const SessionCardSkeleton = memo(({ userId, count }: { userId?: string; c
         <div className="flex flex-col gap-2 md:hidden">
           {/* Top row - Avatar + name (left) + timestamp (right) */}
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Skeleton className="h-6 w-6 rounded-full" />
-              <Skeleton className="h-3 w-24" />
-            </div>
-            <Skeleton className={cn("h-3", getRandomTimeWidth())} />
+            {!userId && (
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-6 w-6 rounded-full" />
+                <Skeleton className="h-3 w-24" />
+              </div>
+            )}
+            <Skeleton className={cn("ml-auto h-3", getRandomTimeWidth())} />
           </div>
 
           {/* Bottom row - Icons, badges, channel */}

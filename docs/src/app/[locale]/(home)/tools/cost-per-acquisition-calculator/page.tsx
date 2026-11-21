@@ -164,7 +164,7 @@ const educationalContent = (
         <strong>Improve quality scores:</strong> Higher ad relevance reduces costs on platforms like Google Ads
       </li>
       <li>
-        <strong>Leverage retargeting:</strong> Re-engage warm audiences who are more likely to convert at lower costs
+        <strong>Use retargeting:</strong> Re-engage warm audiences who are more likely to convert at lower costs
       </li>
     </ol>
   </>
@@ -235,7 +235,7 @@ export default function CostPerAcquisitionPage() {
       faqs={faqs}
       relatedToolsCategory="analytics"
       ctaTitle="Track your acquisition costs with Rybbit"
-      ctaDescription="Monitor CPA, conversion rates, and campaign performance in real-time with Rybbit's analytics platform."
+      ctaDescription="Monitor CPA, conversion rates, and campaign performance in real time with Rybbit's analytics platform."
       ctaEventLocation="cost_per_acquisition_calculator_cta"
       structuredData={structuredData}
     />

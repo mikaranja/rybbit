@@ -236,8 +236,8 @@ const educationalContent = (
       </li>
       <li>
         <strong>Define Your Minimum Detectable Effect:</strong> What's the smallest improvement worth detecting? If your
-        baseline is 2%, a 0.5% MDE means you want to reliably detect moving to 2.5% or higher. Think about business
-        impact, not just percentage points.
+        baseline is 2%, a 0.5% MDE means you want to reliably detect moving to 2.5% or higher. Base it on business
+        impact rather than percentage points alone.
       </li>
       <li>
         <strong>Choose Your Confidence Level (Default: 95%):</strong> 95% is standard and recommended. This means you
@@ -285,7 +285,7 @@ const faqs = [
     question: "What is statistical significance and why does it matter?",
     answer: (
       <>
-        Statistical significance means the difference between your variants is real and not just due to random chance.
+        Statistical significance means the difference between your variants is unlikely to be due to random chance.
         At 95% confidence, a statistically significant result means there's less than a 5% probability the difference
         occurred randomly. Without sufficient sample size, you might see a "winning" variant that's just lucky
         variation. Reaching calculated sample size is critical - don't stop tests early even if you see early winners.
@@ -342,7 +342,7 @@ export default function SampleSizeCalculatorPage() {
       faqs={faqs}
       relatedToolsCategory="analytics"
       ctaTitle="Run better A/B tests with Rybbit"
-      ctaDescription="Track conversions, variants, and statistical significance in real-time. Know exactly when you've reached statistical significance and avoid costly false positives."
+      ctaDescription="Track conversions, variants, and statistical significance in real time. Know exactly when you've reached statistical significance and avoid costly false positives."
       ctaEventLocation="sample_size_calculator_cta"
       structuredData={structuredData}
     />

@@ -3,14 +3,16 @@ import {
   createExperiment,
   deleteExperiment,
   ExperimentPayload,
+  ExperimentResults,
+  ExperimentTimeseries,
   ExperimentUpdatePayload,
-  fetchExperimentResults,
+  ExperimentWindowMode,
   fetchExperiments,
   updateExperiment,
 } from "../../endpoints";
-import { buildApiParams } from "../../../utils";
 import { GOALS_PAGE_FILTERS } from "../../../../lib/filterGroups";
 import { getFilteredFilters, useStore } from "../../../../lib/store";
+import { type AnalyticsQueryOptions, useAnalyticsQuery } from "../../useAnalyticsQuery";
 
 export function useExperiments() {
   const { site } = useStore();
@@ -22,16 +24,43 @@ export function useExperiments() {
   });
 }
 
-export function useExperimentResults(experimentId: number, enabled = true) {
-  const { site, time, timezone } = useStore();
+function experimentQuery<T>(
+  key: string,
+  path: string,
+  experimentId: number,
+  windowMode: ExperimentWindowMode,
+  enabled: boolean
+): AnalyticsQueryOptions<T> {
   const filteredFilters = getFilteredFilters(GOALS_PAGE_FILTERS);
-  const params = buildApiParams(time, { filters: filteredFilters });
 
-  return useQuery({
-    queryKey: ["experiment-results", site, experimentId, time, filteredFilters, timezone],
-    queryFn: () => fetchExperimentResults(site, experimentId, params),
-    enabled: !!site && !!experimentId && enabled,
-  });
+  return {
+    key: [key, experimentId],
+    path: `experiments/${experimentId}/${path}`,
+    params: { window: windowMode },
+    useTime: windowMode === "range",
+    useFilters: filteredFilters.length > 0,
+    customFilters: filteredFilters,
+    enabled: !!experimentId && enabled,
+    // Keyed by experiment: never show another experiment's results.
+    staleTime: 0,
+    placeholder: false,
+  };
+}
+
+export function useExperimentResults(experimentId: number, enabled = true, windowMode: ExperimentWindowMode = "experiment") {
+  return useAnalyticsQuery<ExperimentResults>(
+    experimentQuery<ExperimentResults>("experiment-results", "results", experimentId, windowMode, enabled)
+  );
+}
+
+export function useExperimentTimeseries(
+  experimentId: number,
+  enabled = true,
+  windowMode: ExperimentWindowMode = "experiment"
+) {
+  return useAnalyticsQuery<ExperimentTimeseries>(
+    experimentQuery<ExperimentTimeseries>("experiment-timeseries", "timeseries", experimentId, windowMode, enabled)
+  );
 }
 
 export function useCreateExperiment() {
@@ -55,7 +84,11 @@ export function useUpdateExperiment() {
       updateExperiment(site, experimentId, payload),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["experiments", site] });
-      queryClient.invalidateQueries({ queryKey: ["experiment-results", site, variables.experimentId] });
+      queryClient.invalidateQueries({ queryKey: ["experiment-results", variables.experimentId] });
+      queryClient.invalidateQueries({ queryKey: ["experiment-timeseries", variables.experimentId] });
+      if (variables.payload.status) {
+        queryClient.invalidateQueries({ queryKey: ["feature-flags", site] });
+      }
     },
   });
 }

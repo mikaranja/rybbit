@@ -1,24 +1,20 @@
-import { TimeBucket } from "@rybbit/shared";
-import { authedFetch } from "../../utils";
-import { CommonApiParams, PaginationParams, SortParams, toQueryParams } from "./types";
+import type { PercentileLevel, TimeBucket, WebVitalMetric } from "@rybbit/shared";
+import { CommonApiParams, PaginationParams, SortParams } from "./types";
+
+type WebVitalPercentiles = {
+  [K in WebVitalMetric as `${K}_${PercentileLevel}`]: number | null;
+};
+
+/** Loads that reported each metric, and how many of those were good and poor. */
+export type WebVitalRatingCounts = {
+  [K in WebVitalMetric as `${K}_${"count" | "good" | "poor"}`]: number;
+};
 
 // Performance Overview Response
-export type GetPerformanceOverviewResponse = {
-  current: {
-    lcp: number;
-    cls: number;
-    inp: number;
-    fcp: number;
-    ttfb: number;
+export type GetPerformanceOverviewResponse = WebVitalPercentiles &
+  WebVitalRatingCounts & {
+    total_performance_events: number;
   };
-  previous: {
-    lcp: number;
-    cls: number;
-    inp: number;
-    fcp: number;
-    ttfb: number;
-  };
-};
 
 // Performance Time Series Response
 export type GetPerformanceTimeSeriesResponse = {
@@ -75,90 +71,19 @@ export type PerformanceByDimensionItem = {
   ttfb_p75: number | null;
   ttfb_p90: number | null;
   ttfb_p99: number | null;
-};
+} & WebVitalRatingCounts;
 
-export interface PerformanceOverviewParams extends CommonApiParams {
-  percentile?: number | string;
-}
+export type PerformanceOverviewParams = CommonApiParams;
 
 export interface PerformanceTimeSeriesParams extends CommonApiParams {
   bucket: TimeBucket;
 }
 
-export interface PerformanceByDimensionParams
-  extends CommonApiParams,
-    PaginationParams,
-    SortParams {
+export interface PerformanceByDimensionParams extends CommonApiParams, PaginationParams, SortParams {
   dimension: string;
-  percentile?: number | string;
 }
 
 export interface PaginatedPerformanceResponse {
   data: PerformanceByDimensionItem[];
   totalCount: number;
-}
-
-/**
- * Fetch performance overview (Core Web Vitals)
- * GET /api/performance/overview/:site
- */
-export async function fetchPerformanceOverview(
-  site: string | number,
-  params: PerformanceOverviewParams
-): Promise<GetPerformanceOverviewResponse> {
-  const queryParams = {
-    ...toQueryParams(params),
-    percentile: params.percentile,
-  };
-
-  const response = await authedFetch<{ data: GetPerformanceOverviewResponse }>(
-    `/sites/${site}/performance/overview`,
-    queryParams
-  );
-  return response.data;
-}
-
-/**
- * Fetch performance time series data
- * GET /api/performance/time-series/:site
- */
-export async function fetchPerformanceTimeSeries(
-  site: string | number,
-  params: PerformanceTimeSeriesParams
-): Promise<GetPerformanceTimeSeriesResponse> {
-  const queryParams = {
-    ...toQueryParams(params),
-    bucket: params.bucket,
-  };
-
-  const response = await authedFetch<{ data: GetPerformanceTimeSeriesResponse }>(
-    `/sites/${site}/performance/time-series`,
-    queryParams
-  );
-  return response.data;
-}
-
-/**
- * Fetch performance broken down by dimension
- * GET /api/performance/by-dimension/:site
- */
-export async function fetchPerformanceByDimension(
-  site: string | number,
-  params: PerformanceByDimensionParams
-): Promise<PaginatedPerformanceResponse> {
-  const queryParams = {
-    ...toQueryParams(params),
-    dimension: params.dimension,
-    limit: params.limit,
-    page: params.page,
-    sort_by: params.sortBy,
-    sort_order: params.sortOrder,
-    percentile: params.percentile,
-  };
-
-  const response = await authedFetch<{ data: PaginatedPerformanceResponse }>(
-    `/sites/${site}/performance/by-dimension`,
-    queryParams
-  );
-  return response.data;
 }

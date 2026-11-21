@@ -1,65 +1,47 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useStore } from "../../../lib/store";
-import {
-  fetchUserTraitKeys,
-  fetchUserTraitValues,
-  fetchUserTraitValueUsers,
-  TraitKeysResponse,
-  TraitValuesResponse,
-  TraitValueUsersResponse,
-} from "../endpoints";
+import { TraitBreakdown, TraitKeysResponse } from "../endpoints";
+import { useAnalyticsQuery } from "../useAnalyticsQuery";
+import { narrowingParams, UsersNarrowing, useUserPageFilters } from "./useGetUsers";
+
+type PeriodTime = "current" | "previous";
+
+// Trait keys describe the whole site, not the selected period.
+const TRAIT_CONTEXT = { useTime: false, useFilters: false } as const;
 
 export function useGetUserTraitKeys() {
-  const { site } = useStore();
-
-  return useQuery<TraitKeysResponse>({
-    queryKey: ["user-trait-keys", site],
-    queryFn: () => fetchUserTraitKeys(site),
-    enabled: !!site,
+  return useAnalyticsQuery<TraitKeysResponse>({
+    key: "user-trait-keys",
+    path: "user-traits/keys",
+    unwrap: false,
+    ...TRAIT_CONTEXT,
+    staleTime: 0,
+    placeholder: false,
   });
 }
 
-export function useGetUserTraitValues(key: string | null) {
-  const { site } = useStore();
-  const limit = 1000;
-
-  return useInfiniteQuery<TraitValuesResponse>({
-    queryKey: ["user-trait-values", site, key],
-    queryFn: async ({ pageParam = 0 }) => {
-      return fetchUserTraitValues(site, {
-        key: key!,
-        limit,
-        offset: pageParam as number,
-      });
-    },
-    initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages) => {
-      const totalFetched = allPages.reduce((acc, page) => acc + page.values.length, 0);
-      return lastPage.hasMore ? totalFetched : undefined;
-    },
-    enabled: !!site && !!key,
-  });
-}
-
-export function useGetUserTraitValueUsers(key: string | null, value: string | null) {
-  const { site } = useStore();
-  const limit = 250;
-
-  return useInfiniteQuery<TraitValueUsersResponse>({
-    queryKey: ["user-trait-value-users", site, key, value],
-    queryFn: async ({ pageParam = 0 }) => {
-      return fetchUserTraitValueUsers(site, {
-        key: key!,
-        value: value!,
-        limit,
-        offset: pageParam as number,
-      });
-    },
-    initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages) => {
-      const totalFetched = allPages.reduce((acc, page) => acc + page.users.length, 0);
-      return lastPage.hasMore ? totalFetched : undefined;
-    },
-    enabled: !!site && !!key && value !== null,
+/**
+ * The period's users grouped by one trait. Takes the same narrowing as the
+ * users list (never a trait group of its own), so a group's count matches the
+ * rows that open under it.
+ */
+export function useGetUserTraitBreakdown({
+  traitKey,
+  periodTime,
+  narrowing,
+  enabled = true,
+}: {
+  traitKey: string | null;
+  periodTime?: PeriodTime;
+  narrowing: Omit<UsersNarrowing, "traitGroup">;
+  enabled?: boolean;
+}) {
+  return useAnalyticsQuery<TraitBreakdown>({
+    // Under the "users" prefix so the mutations that invalidate the list refresh this too.
+    key: ["users", "trait-breakdown"],
+    path: "user-traits/breakdown",
+    periodTime,
+    ...useUserPageFilters(),
+    params: { key: traitKey ?? undefined, ...narrowingParams(narrowing) },
+    staleTime: 0,
+    enabled: enabled && !!traitKey,
   });
 }

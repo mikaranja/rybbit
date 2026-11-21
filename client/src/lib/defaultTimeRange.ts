@@ -27,43 +27,11 @@ export const DASHBOARD_DEFAULT_TIME_RANGES = [
 
 const DEFAULT_DASHBOARD_TIME_RANGE: DashboardDefaultTimeRange = "today";
 
-const DEFAULT_TIME_RANGE_ALIASES: Record<string, DashboardDefaultTimeRange> = {
-  today: "today",
-  yesterday: "yesterday",
-  "last-3-days": "last-3-days",
-  "last-3d": "last-3-days",
-  "last-7-days": "last-7-days",
-  "last-7d": "last-7-days",
-  "last-14-days": "last-14-days",
-  "last-14d": "last-14-days",
-  "last-30-days": "last-30-days",
-  "last-30d": "last-30-days",
-  "last-60-days": "last-60-days",
-  "last-60d": "last-60-days",
-  "this-week": "this-week",
-  "last-week": "last-week",
-  "this-month": "this-month",
-  "last-month": "last-month",
-  "this-year": "this-year",
-  "last-30-minutes": "last-30-minutes",
-  "last-30m": "last-30-minutes",
-  "last-1-hour": "last-1-hour",
-  "last-1h": "last-1-hour",
-  "last-hour": "last-1-hour",
-  "last-6-hours": "last-6-hours",
-  "last-6h": "last-6-hours",
-  "last-24-hours": "last-24-hours",
-  "last-24h": "last-24-hours",
-  "all-time": "all-time",
-  all: "all-time",
-};
-
 export function normalizeDashboardDefaultTimeRange(
   value: string | null | undefined,
   fallback: DashboardDefaultTimeRange = DEFAULT_DASHBOARD_TIME_RANGE
 ): DashboardDefaultTimeRange {
-  const key = value?.trim().toLowerCase().replace(/_/g, "-");
-  return (key && DEFAULT_TIME_RANGE_ALIASES[key]) || fallback;
+  return DASHBOARD_DEFAULT_TIME_RANGES.find(range => range === value) ?? fallback;
 }
 
 export function getStoredDashboardDefaultTimeRange(): DashboardDefaultTimeRange {
@@ -182,6 +150,30 @@ export function getDashboardTimeForRange(value: string, timezone: string): Time 
   }
 }
 
+// Some pages cannot afford an all-time default. The users list aggregates every
+// event a site has ever recorded — the count query behind it scanned 5.6 B rows
+// over six days — which is an expensive way to answer a question the visitor has
+// not asked yet.
+//
+// This caps the *default* only, and it belongs here rather than on the page:
+// every caller below already skips the stored default when the URL carries a
+// time, and an explicit selection is written to the URL. So picking All time
+// from the selector still works and still survives leaving and returning; what
+// no longer happens is landing on it unasked.
+const DEFAULT_RANGE_CAPS: { appliesTo: (pathname: string) => boolean; cap: DashboardDefaultTimeRange }[] = [
+  { appliesTo: pathname => pathname.endsWith("/users"), cap: "last-30-days" },
+];
+
+export function capDashboardDefaultRange(
+  range: DashboardDefaultTimeRange,
+  pathname: string
+): DashboardDefaultTimeRange {
+  if (range !== "all-time") return range;
+  return DEFAULT_RANGE_CAPS.find(rule => rule.appliesTo(pathname))?.cap ?? range;
+}
+
 export function getStoredDashboardDefaultTime(timezone: string): Time {
-  return getDashboardTimeForRange(getStoredDashboardDefaultTimeRange(), timezone);
+  const stored = getStoredDashboardDefaultTimeRange();
+  const range = typeof window === "undefined" ? stored : capDashboardDefaultRange(stored, window.location.pathname);
+  return getDashboardTimeForRange(range, timezone);
 }

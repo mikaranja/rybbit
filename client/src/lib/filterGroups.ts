@@ -29,6 +29,10 @@ const BASE_FILTERS: FilterParameter[] = [
 
 export const SESSION_PAGE_FILTERS: FilterParameter[] = [...BASE_FILTERS, "pathname", "entry_page", "exit_page", "event_name"];
 
+// Single-user detail page: the page is already scoped to one user, so the
+// user_id filter is excluded.
+export const USER_DETAIL_PAGE_FILTERS: FilterParameter[] = SESSION_PAGE_FILTERS.filter(f => f !== "user_id");
+
 export const EVENT_FILTERS: FilterParameter[] = [
   ...BASE_FILTERS,
   "pathname",
@@ -59,12 +63,12 @@ export const JOURNEY_PAGE_FILTERS: FilterParameter[] = [
   "city",
   "device_type",
   "referrer",
-  // "channel",
-  // "utm_source",
-  // "utm_medium",
-  // "utm_campaign",
-  // "utm_term",
-  // "utm_content",
+  "channel",
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
   "entry_page",
   "exit_page",
   "dimensions",

@@ -3,20 +3,8 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { db } from "../../../db/postgres/postgres.js";
 import { funnels as funnelsTable } from "../../../db/postgres/schema.js";
 import { getUserHasAccessToSite } from "../../../lib/auth-utils.js";
-import { Filter } from "../types.js";
-
-type FunnelStep = {
-  value: string;
-  name?: string;
-  type: "page" | "event";
-  hostname?: string;
-  eventPropertyKey?: string;
-  eventPropertyValue?: string | number | boolean;
-  propertyFilters?: Array<{
-    key: string;
-    value: string | number | boolean;
-  }>;
-};
+import { isAutocaptureTargetType } from "../utils/eventConditions.js";
+import { FunnelStep, INVALID_FUNNEL_STEPS_ERROR, MAX_FUNNEL_STEPS, parseFunnelSteps } from "./funnelSteps.js";
 
 type Funnel = {
   steps: FunnelStep[];
@@ -33,13 +21,24 @@ export async function createFunnel(
   }>,
   reply: FastifyReply
 ) {
-  const { steps, name, reportId } = request.body;
+  const { name, reportId } = request.body;
   const { siteId } = request.params;
   const userId = request.user?.id;
 
-  // Validate request
-  if (!steps || steps.length < 2) {
-    return reply.status(400).send({ error: "At least 2 steps are required for a funnel" });
+  // Saved steps are read back into SQL, so only well-formed ones are stored.
+  const steps = parseFunnelSteps(request.body?.steps, MAX_FUNNEL_STEPS);
+  if (!steps) {
+    return reply.status(400).send({ error: INVALID_FUNNEL_STEPS_ERROR });
+  }
+
+  // Reject unrecognized step types instead of silently matching them as custom events
+  if (steps.some(step => step.type !== "page" && step.type !== "event" && !isAutocaptureTargetType(step.type))) {
+    return reply.status(400).send({ error: "Invalid step type" });
+  }
+
+  // Page and event steps need a value; autocapture steps may match any event of their type
+  if (steps.some(step => (step.type === "page" || step.type === "event") && !step.value)) {
+    return reply.status(400).send({ error: "Page and event steps require a value" });
   }
 
   if (!name) {
@@ -105,7 +104,7 @@ export async function createFunnel(
       funnelId: result[0].reportId,
     });
   } catch (error) {
-    console.error("Error creating funnel:", error);
+    request.log.error({ err: error }, "Error creating funnel");
     return reply.status(500).send({ error: "Failed to create funnel" });
   }
 }

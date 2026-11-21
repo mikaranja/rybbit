@@ -1,13 +1,9 @@
 import { FilterParameter } from "@rybbit/shared";
 import { useQueries } from "@tanstack/react-query";
 import { useMemo } from "react";
-import {
-  fetchMetric,
-  fetchMetricLite,
-  MetricResponse,
-} from "@/api/analytics/endpoints";
-import { buildApiParams } from "@/api/utils";
-import { useStore } from "@/lib/store";
+import { buildAnalyticsRequest, fetchAnalytics } from "@/api/analytics/analyticsRequest";
+import { MetricResponse } from "@/api/analytics/endpoints";
+import { querySignature, useRollupQueryContext, useSettledSnapshot } from "./useRollupQueryContext";
 
 export type RollupMetricRow = MetricResponse;
 
@@ -29,29 +25,21 @@ export function useRollupMetric({
   limit?: number;
   lite?: boolean;
 }): UseRollupMetricResult {
-  const { time, filters, timezone } = useStore();
-  const effectiveFilters = lite ? undefined : filters;
-  const params = buildApiParams(time, { filters: effectiveFilters });
+  const context = useRollupQueryContext(lite);
+  const request = buildAnalyticsRequest(
+    { path: lite ? "metric-lite" : "metric", params: { parameter, limit, page: 1 } },
+    context
+  );
 
   const queries = useQueries({
     queries: siteIds.map((siteId) => ({
-      queryKey: [
-        lite ? "rollup-metric-lite" : "rollup-metric",
-        parameter,
-        siteId,
-        time,
-        effectiveFilters,
-        limit,
-        timezone,
-      ],
-      queryFn: () => {
-        const fetcher = lite ? fetchMetricLite : fetchMetric;
-        return fetcher(siteId, { ...params, parameter, limit, page: 1 });
-      },
+      queryKey: ["rollup-metric", siteId, request.path, request.params],
+      queryFn: () => fetchAnalytics<{ data: MetricResponse[]; totalCount: number }>(siteId, request),
       staleTime: 60_000,
     })),
   });
 
+  const signature = querySignature(siteIds, queries);
   const merged = useMemo(() => {
     // Per-value accumulator. Sums sessions/pageviews and tracks weighted-sum
     // numerators + denominators for averages so we can recompute correctly
@@ -141,11 +129,12 @@ export function useRollupMetric({
 
     rows.sort((a, b) => b.count - a.count);
     return rows;
-  }, [queries.map((q) => q.dataUpdatedAt).join(",")]);
+  }, [signature]);
+  const settled = useSettledSnapshot(merged, queries);
 
   return {
-    data: merged,
-    isLoading: queries.some((q) => q.isLoading),
+    data: settled.data ?? [],
+    isLoading: settled.isLoading,
     isFetching: queries.some((q) => q.isFetching),
     error: (queries.find((q) => q.error)?.error as Error) ?? null,
   };
